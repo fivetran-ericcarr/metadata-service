@@ -35,12 +35,22 @@ def _write_json(path: str, payload: dict) -> None:
 @fivetran_app.command("extract")
 def fivetran_extract(
     group_id: str | None = typer.Option(None, "--group-id", help="Filter to a Fivetran group."),
+    connected_only: bool = typer.Option(
+        False, "--connected-only", help="Skip connections whose setup is not 'connected' (broken/incomplete)."
+    ),
+    skip_paused: bool = typer.Option(
+        False, "--skip-paused", help="Skip paused connections (paused flag or sync_state=paused)."
+    ),
     out: str = typer.Option("fivetran_raw_latest.json", "--out"),
 ) -> None:
     """Pull raw Fivetran metadata and write fivetran_raw_latest.json."""
     settings = get_settings()
     with FivetranClient(settings) as client:
-        raw = FivetranExtractor(client).extract(group_id=group_id or settings.fivetran_group_id)
+        raw = FivetranExtractor(client).extract(
+            group_id=group_id or settings.fivetran_group_id,
+            connected_only=connected_only,
+            skip_paused=skip_paused,
+        )
     _write_json(out, raw)
 
 
@@ -62,6 +72,12 @@ def build(
     ),
     include_fivetran: bool = typer.Option(True, "--include-fivetran/--no-fivetran"),
     include_dbt: bool = typer.Option(True, "--include-dbt/--no-dbt"),
+    connected_only: bool = typer.Option(
+        False, "--connected-only", help="Skip connections whose setup is not 'connected' (broken/incomplete)."
+    ),
+    skip_paused: bool = typer.Option(
+        False, "--skip-paused", help="Skip paused connections (paused flag or sync_state=paused)."
+    ),
     write_latest: bool = typer.Option(True, "--write-latest/--no-write-latest"),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
@@ -72,6 +88,8 @@ def build(
         include_fivetran=include_fivetran,
         include_dbt=include_dbt,
         fixtures_dir=fixtures_dir,
+        connected_only=connected_only,
+        skip_paused=skip_paused,
     )
     summary = {k: v for k, v in result.items() if k != "doc"}
     summary["drift_count"] = len(result["doc"].get("schema_drift", []))

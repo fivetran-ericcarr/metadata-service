@@ -24,16 +24,28 @@ class FivetranExtractor:
         group_id: str | None = None,
         *,
         connected_only: bool = False,
+        skip_paused: bool = False,
         enrich_connector_types: bool = True,
     ) -> dict:
-        """Extract Fivetran connection, schema, table, and column metadata."""
+        """Extract Fivetran connection, schema, table, and column metadata.
+
+        Filters:
+        - ``connected_only``: skip connections whose ``setup_state != "connected"``
+          (i.e. broken/incomplete setups).
+        - ``skip_paused``: skip connections that are paused (``paused`` flag set or
+          ``sync_state == "paused"``).
+        """
         errors: list[dict] = []
         connector_type_cache: dict[str, dict] = {}
 
-        logger.info("Fivetran extraction starting (group_id=%s)", group_id or "<all>")
+        logger.info(
+            "Fivetran extraction starting (group_id=%s, connected_only=%s, skip_paused=%s)",
+            group_id or "<all>", connected_only, skip_paused,
+        )
         connections_summary = self._client.list_connections(group_id=group_id)
 
         out_connections: list[dict] = []
+        skipped_count = 0
         table_count = 0
         column_count = 0
 
@@ -51,9 +63,18 @@ class FivetranExtractor:
                 detail = dict(summary)
                 errors.append(self._err(connection_id, None, None, exc))
 
-            setup_state = (detail.get("status") or {}).get("setup_state")
+            status = detail.get("status") or {}
+            setup_state = status.get("setup_state")
+            sync_state = status.get("sync_state")
+            is_paused = bool(detail.get("paused")) or sync_state == "paused"
+
             if connected_only and setup_state and setup_state != "connected":
                 logger.debug("Skipping connection %s (setup_state=%s)", connection_id, setup_state)
+                skipped_count += 1
+                continue
+            if skip_paused and is_paused:
+                logger.debug("Skipping paused connection %s (sync_state=%s)", connection_id, sync_state)
+                skipped_count += 1
                 continue
 
             try:
@@ -94,8 +115,9 @@ class FivetranExtractor:
             )
 
         logger.info(
-            "Fivetran extraction complete: %s connections, %s tables, %s columns, %s errors",
+            "Fivetran extraction complete: %s connections (%s skipped), %s tables, %s columns, %s errors",
             len(out_connections),
+            skipped_count,
             table_count,
             column_count,
             len(errors),

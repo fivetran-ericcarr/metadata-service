@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `CHANGELOG.md` to track changes as they are made.
 - `ARTIFACTS.md` documenting every JSON artifact the service produces.
+- Fivetran connection filters `--connected-only` (skip broken/incomplete setups)
+  and `--skip-paused` (skip paused connections), exposed on both
+  `fivetran extract` and `build` and threaded through the extractor and pipeline.
+  Note: `--connected-only` filters on `setup_state`, so paused-but-connected
+  connectors are excluded only by `--skip-paused`.
 
 ### Changed
 - Pinned `starlette>=0.46,<1.0` to silence the Starlette `TestClient` deprecation

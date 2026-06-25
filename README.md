@@ -109,6 +109,11 @@ metadata-service dbt extract                            # -> dbt_raw_latest.json
 metadata-service build --group-id <group>               # full build -> latest.json snapshot
 metadata-service build --fixtures-dir tests/fixtures    # OFFLINE build from fixtures (no creds)
 
+# Connection filters (apply to `fivetran extract` and `build`):
+metadata-service fivetran extract --connected-only      # skip broken/incomplete setups
+metadata-service fivetran extract --skip-paused         # skip paused connections
+metadata-service build --group-id <group> --connected-only --skip-paused
+
 metadata-service drift                                  # compare latest vs previous snapshot
 metadata-service recommendations --schema salesforce --table account
 
