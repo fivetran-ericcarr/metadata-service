@@ -217,6 +217,7 @@ class CombinedNormalizer:
                     "source_name": col.get("source_name"),
                     "enabled": col.get("enabled", True),
                     "is_primary_key": col.get("is_primary_key", False),
+                    "key_constraint": col.get("key_constraint"),
                     "hashed": col.get("hashed", False),
                     "dbt_description": dbt_desc.get(lname),
                     "dbt_tests": tests_by_col.get(lname, []),

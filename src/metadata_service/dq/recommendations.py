@@ -60,6 +60,16 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
             {**target_base, "columns": [c.get("name") for c in pk_columns]},
             CONFIDENCE_HIGH, "Fivetran reports a composite primary key on this table."))
 
+    # --- Ambiguous key columns (PK *or* FK; SaaS/SDK connectors don't disambiguate)
+    for col in columns:
+        if col.get("key_constraint") == "primary_or_foreign_key" and not col.get("is_primary_key"):
+            existing = {t.lower() for t in (col.get("dbt_tests") or [])}
+            if "not_null" not in existing:
+                recs.append(_dbt_test(
+                    object_id, "not_null", {**target_base, "column": col.get("name")},
+                    CONFIDENCE_MEDIUM,
+                    "Fivetran locks this column as a primary or foreign key (cannot disambiguate)."))
+
     # --- Freshness --------------------------------------------------------
     if dbt_section.get("source_unique_id"):
         freshness = dbt_section.get("freshness")

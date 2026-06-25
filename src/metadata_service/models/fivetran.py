@@ -17,6 +17,8 @@ class FivetranColumn(BaseModel):
     destination_name: str
     enabled: bool = True
     is_primary_key: bool = False
+    # "primary_key" | "primary_or_foreign_key" | None
+    key_constraint: str | None = None
     hashed: bool = False
 
 

@@ -49,6 +49,41 @@ def test_columns_merge_schema_config_and_columns_endpoint(fivetran_normalized):
     assert cols["Name"]["hashed"] is False
 
 
+def test_primary_key_derived_from_enabled_patch_settings():
+    """Postgres PK (incl. synthetic ctid) is locked with a Primary Key reason."""
+    from metadata_service.normalizers.fivetran_normalizer import _derive_key
+
+    pk = {"enabled_patch_settings": {"allowed": False, "reason_code": "SYSTEM_COLUMN",
+                                     "reason": "Column does not support exclusion as it is a Primary Key"}}
+    assert _derive_key(pk) == (True, "primary_key")
+
+
+def test_ambiguous_pk_or_fk_not_marked_primary_key():
+    """SaaS/SDK connectors lump primary and foreign keys together."""
+    from metadata_service.normalizers.fivetran_normalizer import _derive_key
+
+    ambiguous = {"enabled_patch_settings": {"allowed": False, "reason_code": "SYSTEM_COLUMN",
+                 "reason": "The column cannot be excluded as it is a primary key or a foreign key"}}
+    assert _derive_key(ambiguous) == (False, "primary_or_foreign_key")
+
+
+def test_plain_and_system_nonkey_columns_are_not_keys():
+    from metadata_service.normalizers.fivetran_normalizer import _derive_key
+
+    plain = {"enabled_patch_settings": {"allowed": True}}
+    sys_nonkey = {"enabled_patch_settings": {"allowed": False, "reason_code": "SYSTEM_COLUMN",
+                  "reason": "System column managed by Fivetran"}}
+    assert _derive_key(plain) == (False, None)
+    assert _derive_key(sys_nonkey) == (False, None)
+
+
+def test_explicit_is_primary_key_takes_precedence():
+    from metadata_service.normalizers.fivetran_normalizer import _derive_key
+
+    assert _derive_key({"is_primary_key": True}) == (True, "primary_key")
+    assert _derive_key({"is_primary_key": False}) == (False, None)
+
+
 def test_errors_passthrough():
     from metadata_service.normalizers import FivetranNormalizer
 

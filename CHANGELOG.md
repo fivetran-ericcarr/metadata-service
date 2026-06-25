@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fivetran extract` and `build` and threaded through the extractor and pipeline.
   Note: `--connected-only` filters on `setup_state`, so paused-but-connected
   connectors are excluded only by `--skip-paused`.
+- Column `key_constraint` field (`primary_key` | `primary_or_foreign_key` | `null`)
+  on normalized Fivetran columns and warehouse-object columns.
+
+### Fixed
+- **Primary key detection.** Fivetran's config API does not return `is_primary_key`;
+  key columns are locked via `enabled_patch_settings` (`reason_code: SYSTEM_COLUMN`
+  with a primary-key reason). The normalizer now derives PKs from this, so
+  `not_null`/`unique` recommendations fire again. Confident PKs (reason names only a
+  primary key, e.g. Postgres `ctid`) set `is_primary_key: true`; SaaS/SDK connectors
+  that lump "primary key or a foreign key" set `key_constraint: primary_or_foreign_key`
+  and get a `not_null` (medium) recommendation only. Verified live: 18 confident PKs,
+  52 ambiguous keys across the test account.
 
 ### Changed
 - Pinned `starlette>=0.46,<1.0` to silence the Starlette `TestClient` deprecation

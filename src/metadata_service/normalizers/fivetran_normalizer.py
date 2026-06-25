@@ -92,13 +92,46 @@ class FivetranNormalizer:
 
         out: list[dict] = []
         for name, cfg in merged.items():
+            is_pk, key_constraint = _derive_key(cfg)
             out.append(
                 {
                     "source_name": name,
                     "destination_name": cfg.get("name_in_destination") or name,
                     "enabled": cfg.get("enabled", True),
-                    "is_primary_key": bool(cfg.get("is_primary_key", False)),
+                    "is_primary_key": is_pk,
+                    "key_constraint": key_constraint,
                     "hashed": bool(cfg.get("hashed", False)),
                 }
             )
         return out
+
+
+def _derive_key(cfg: dict) -> tuple[bool, str | None]:
+    """Determine primary-key status for a Fivetran column.
+
+    Fivetran's config API does not expose an ``is_primary_key`` field for most
+    connectors. Instead, key columns are *locked* from exclusion via
+    ``enabled_patch_settings`` (``allowed: false``, ``reason_code:
+    "SYSTEM_COLUMN"``) with a human reason naming the constraint:
+
+    - "...as it is a Primary Key"                      -> confident PK
+    - "...primary key or a foreign key" (SaaS/SDK)     -> key, but PK/FK ambiguous
+
+    Returns ``(is_primary_key, key_constraint)`` where ``key_constraint`` is one of
+    ``"primary_key"``, ``"primary_or_foreign_key"``, or ``None``.
+
+    An explicit ``is_primary_key`` field (file connectors / future API support)
+    always takes precedence.
+    """
+    explicit = cfg.get("is_primary_key")
+    if explicit is not None:
+        return bool(explicit), ("primary_key" if explicit else None)
+
+    eps = cfg.get("enabled_patch_settings") or {}
+    reason = (eps.get("reason") or "").lower()
+    locked = eps.get("allowed") is False
+    if locked and eps.get("reason_code") == "SYSTEM_COLUMN" and "primary key" in reason:
+        if "foreign key" in reason:
+            return False, "primary_or_foreign_key"
+        return True, "primary_key"
+    return False, None

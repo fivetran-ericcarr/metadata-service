@@ -212,6 +212,7 @@ downstream models.
       "source_name": "Id",
       "enabled": true,
       "is_primary_key": true,
+      "key_constraint": "primary_key",
       "hashed": false,
       "dbt_description": "Account id from Salesforce",
       "dbt_tests": ["not_null", "unique"],
@@ -239,10 +240,25 @@ downstream models.
 | `dbt.model_unique_ids` | Downstream dbt models reached via lineage |
 | `dbt.tests` | Tests attached to the matched source + models |
 | `dbt.freshness` | Freshness result/config for the matched source (or `null`) |
+| `columns[].is_primary_key` | True only for an unambiguous Fivetran primary key (see below) |
+| `columns[].key_constraint` | `primary_key`, `primary_or_foreign_key`, or `null` |
 | `columns[].dbt_tests` | dbt test types already present on that column |
 | `columns[].recommended_tests` | Test names recommended for that column (see 2.4) |
 | `match_confidence` | `exact_relation`, `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched` |
 | `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if recommendations exist, PK tests are missing, or unmatched) |
+
+**Primary key detection.** Fivetran's config API does not return an
+`is_primary_key` field for most connectors. Key columns are instead locked from
+exclusion via `enabled_patch_settings` (`allowed: false`, `reason_code:
+"SYSTEM_COLUMN"`) with a reason naming the constraint. The normalizer reads this:
+
+- reason names only a primary key → `is_primary_key: true`, `key_constraint: "primary_key"`
+  (e.g. Postgres uses the synthetic `ctid` column as the PK).
+- reason names "primary key or a foreign key" (SaaS/SDK connectors) → `is_primary_key: false`,
+  `key_constraint: "primary_or_foreign_key"` — these get a `not_null` recommendation
+  at `medium` confidence, but not `unique` (it may be a foreign key).
+
+An explicit `is_primary_key` field, when a connector provides one, always wins.
 
 ### 2.4 `dq_recommendations[]`
 
