@@ -1,0 +1,28 @@
+{
+  "metadata": { "dbt_version": "1.7.0" },
+  "nodes": {
+    "model.demo.stg_salesforce__account": {
+      "metadata": { "schema": "salesforce", "name": "stg_salesforce__account" },
+      "columns": {
+        "id": { "type": "NUMBER", "index": 1 },
+        "email": { "type": "VARCHAR", "index": 2 },
+        "status": { "type": "VARCHAR", "index": 3 }
+      }
+    },
+    "model.demo.dim_account": {
+      "metadata": { "schema": "marts", "name": "dim_account" },
+      "columns": {
+        "account_id": { "type": "NUMBER", "index": 1 }
+      }
+    }
+  },
+  "sources": {
+    "source.demo.salesforce.account": {
+      "metadata": { "schema": "salesforce", "name": "account" },
+      "columns": {
+        "id": { "type": "NUMBER", "index": 1 },
+        "email": { "type": "VARCHAR", "index": 2 }
+      }
+    }
+  }
+}

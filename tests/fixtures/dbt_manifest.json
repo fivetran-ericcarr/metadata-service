@@ -1,0 +1,117 @@
+{
+  "metadata": { "dbt_version": "1.7.0", "project_name": "demo" },
+  "nodes": {
+    "model.demo.stg_salesforce__account": {
+      "resource_type": "model",
+      "name": "stg_salesforce__account",
+      "package_name": "demo",
+      "database": "analytics",
+      "schema": "salesforce",
+      "alias": "stg_salesforce__account",
+      "relation_name": "analytics.salesforce.stg_salesforce__account",
+      "config": { "materialized": "view" },
+      "description": "Staging model for Salesforce accounts.",
+      "columns": {
+        "id": { "description": "Salesforce account ID", "data_type": null },
+        "email": { "description": "Account contact email" },
+        "status": { "description": "Account lifecycle status" }
+      },
+      "tags": ["staging"],
+      "meta": { "owner": "analytics" },
+      "depends_on": { "nodes": ["source.demo.salesforce.account"] },
+      "refs": [],
+      "sources": [["salesforce", "account"]]
+    },
+    "model.demo.dim_account": {
+      "resource_type": "model",
+      "name": "dim_account",
+      "package_name": "demo",
+      "database": "analytics",
+      "schema": "marts",
+      "alias": "dim_account",
+      "relation_name": "analytics.marts.dim_account",
+      "config": { "materialized": "table" },
+      "description": "Account dimension.",
+      "columns": {
+        "account_id": { "description": "Surrogate account key" }
+      },
+      "tags": ["marts"],
+      "meta": {},
+      "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] },
+      "refs": [["stg_salesforce__account"]],
+      "sources": []
+    },
+    "test.demo.not_null_stg_salesforce__account_id": {
+      "resource_type": "test",
+      "name": "not_null_stg_salesforce__account_id",
+      "package_name": "demo",
+      "column_name": "id",
+      "attached_node": "model.demo.stg_salesforce__account",
+      "test_metadata": { "name": "not_null", "kwargs": { "column_name": "id" } },
+      "config": { "severity": "error" },
+      "tags": [],
+      "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
+    },
+    "test.demo.unique_stg_salesforce__account_id": {
+      "resource_type": "test",
+      "name": "unique_stg_salesforce__account_id",
+      "package_name": "demo",
+      "column_name": "id",
+      "attached_node": "model.demo.stg_salesforce__account",
+      "test_metadata": { "name": "unique", "kwargs": { "column_name": "id" } },
+      "config": { "severity": "error" },
+      "tags": [],
+      "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
+    },
+    "test.demo.accepted_values_stg_salesforce__account_status": {
+      "resource_type": "test",
+      "name": "accepted_values_stg_salesforce__account_status",
+      "package_name": "demo",
+      "column_name": "status",
+      "attached_node": "model.demo.stg_salesforce__account",
+      "test_metadata": { "name": "accepted_values", "kwargs": { "column_name": "status", "values": ["active", "inactive"] } },
+      "config": { "severity": "warn" },
+      "tags": [],
+      "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
+    },
+    "test.demo.not_null_dim_account_account_id": {
+      "resource_type": "test",
+      "name": "not_null_dim_account_account_id",
+      "package_name": "demo",
+      "column_name": "account_id",
+      "attached_node": "model.demo.dim_account",
+      "test_metadata": { "name": "not_null", "kwargs": { "column_name": "account_id" } },
+      "config": { "severity": "error" },
+      "tags": [],
+      "depends_on": { "nodes": ["model.demo.dim_account"] }
+    }
+  },
+  "sources": {
+    "source.demo.salesforce.account": {
+      "resource_type": "source",
+      "source_name": "salesforce",
+      "name": "account",
+      "database": "analytics",
+      "schema": "salesforce",
+      "identifier": "account",
+      "relation_name": "analytics.salesforce.account",
+      "description": "Raw Salesforce account table replicated by Fivetran.",
+      "columns": {
+        "id": { "description": "Account id from Salesforce" },
+        "email": { "description": "Raw email" }
+      },
+      "freshness": {
+        "warn_after": { "count": 24, "period": "hour" },
+        "error_after": { "count": 48, "period": "hour" }
+      },
+      "loaded_at_field": "_fivetran_synced"
+    }
+  },
+  "exposures": {
+    "exposure.demo.account_dashboard": {
+      "resource_type": "exposure",
+      "name": "account_dashboard",
+      "depends_on": { "nodes": ["model.demo.dim_account"] }
+    }
+  }
+}

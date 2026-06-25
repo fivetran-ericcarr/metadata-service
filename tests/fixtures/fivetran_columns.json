@@ -1,0 +1,15 @@
+{
+  "conn_sf_001": {
+    "salesforce.Account": {
+      "columns": {
+        "Id": { "name_in_destination": "id", "enabled": true, "is_primary_key": true, "hashed": false },
+        "Email": { "name_in_destination": "email", "enabled": true, "is_primary_key": false, "hashed": true }
+      }
+    },
+    "salesforce.Contact": {
+      "columns": {
+        "Id": { "name_in_destination": "id", "enabled": true, "is_primary_key": true, "hashed": false }
+      }
+    }
+  }
+}

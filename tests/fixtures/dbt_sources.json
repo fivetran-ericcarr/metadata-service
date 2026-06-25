@@ -1,0 +1,15 @@
+{
+  "metadata": { "dbt_version": "1.7.0" },
+  "results": [
+    {
+      "unique_id": "source.demo.salesforce.account",
+      "status": "pass",
+      "max_loaded_at": "2026-06-25T12:15:00Z",
+      "snapshotted_at": "2026-06-25T12:40:00Z",
+      "criteria": {
+        "warn_after": { "count": 24, "period": "hour" },
+        "error_after": { "count": 48, "period": "hour" }
+      }
+    }
+  ]
+}

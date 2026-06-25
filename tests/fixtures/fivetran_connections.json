@@ -1,0 +1,16 @@
+{
+  "extracted_at": "2026-06-25T12:40:00Z",
+  "connections": [
+    {
+      "id": "conn_sf_001",
+      "service": "salesforce",
+      "schema": "salesforce",
+      "group_id": "group_123",
+      "status": {
+        "setup_state": "connected",
+        "sync_state": "scheduled"
+      },
+      "succeeded_at": "2026-06-25T12:34:56Z"
+    }
+  ]
+}

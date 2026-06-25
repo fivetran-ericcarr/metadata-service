@@ -1,0 +1,32 @@
+{
+  "conn_sf_001": {
+    "schema_change_handling": "ALLOW_ALL",
+    "schemas": {
+      "salesforce": {
+        "name_in_destination": "salesforce",
+        "enabled": true,
+        "tables": {
+          "Account": {
+            "name_in_destination": "account",
+            "enabled": true,
+            "columns": {
+              "Id": { "name_in_destination": "id", "enabled": true },
+              "Name": { "name_in_destination": "name", "enabled": true },
+              "Email": { "name_in_destination": "email", "enabled": true },
+              "Status": { "name_in_destination": "status", "enabled": true },
+              "OwnerId": { "name_in_destination": "owner_id", "enabled": true }
+            }
+          },
+          "Contact": {
+            "name_in_destination": "contact",
+            "enabled": true,
+            "columns": {
+              "Id": { "name_in_destination": "id", "enabled": true },
+              "Email": { "name_in_destination": "email", "enabled": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}
