@@ -74,11 +74,13 @@ class DbtClient:
         self.close()
 
     # -- low level --------------------------------------------------------
-    def _request(self, method: str, path: str, params: dict | None = None) -> httpx.Response:
+    def _request(
+        self, method: str, path: str, params: dict | None = None, headers: dict | None = None
+    ) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
-                resp = self._client.request(method, path, params=params)
+                resp = self._client.request(method, path, params=params, headers=headers)
             except httpx.HTTPError as exc:
                 last_exc = exc
                 logger.warning("dbt request error (%s %s) attempt %s: %s", method, path, attempt, exc)
@@ -120,13 +122,36 @@ class DbtClient:
             return payload["data"]
         return payload
 
+    def _paginate(self, path: str, params: dict | None = None, page_size: int = 100,
+                  cap: int = 5000) -> list[dict]:
+        """Page through a dbt Admin API list endpoint via limit/offset.
+
+        The Admin API caps page size at 100 and reports ``extra.pagination.total_count``.
+        """
+        params = dict(params or {})
+        params["limit"] = page_size
+        offset = 0
+        out: list[dict] = []
+        while True:
+            params["offset"] = offset
+            payload = self._get_json(path, params=params)
+            data = self._data(payload) or []
+            out.extend(data)
+            offset += len(data)
+            total = None
+            if isinstance(payload, dict):
+                total = ((payload.get("extra") or {}).get("pagination") or {}).get("total_count")
+            if not data or len(data) < page_size or (total is not None and offset >= total) or offset >= cap:
+                break
+        return out
+
     # -- Admin API v2 -----------------------------------------------------
     def list_projects(self, account_id: str) -> list[dict]:
-        return self._data(self._get_json(f"/v2/accounts/{account_id}/projects/")) or []
+        return self._paginate(f"/v2/accounts/{account_id}/projects/")
 
     def list_environments(self, account_id: str, project_id: int | None = None) -> list[dict]:
         params = {"project_id": project_id} if project_id else None
-        return self._data(self._get_json(f"/v2/accounts/{account_id}/environments/", params=params)) or []
+        return self._paginate(f"/v2/accounts/{account_id}/environments/", params=params)
 
     def list_jobs(
         self,
@@ -139,12 +164,20 @@ class DbtClient:
             params["project_id"] = project_id
         if environment_id:
             params["environment_id"] = environment_id
-        return self._data(self._get_json(f"/v2/accounts/{account_id}/jobs/", params=params or None)) or []
+        return self._paginate(f"/v2/accounts/{account_id}/jobs/", params=params or None)
 
-    def list_runs(self, account_id: str, job_id: int | None = None, limit: int = 100) -> list[dict]:
+    def list_runs(
+        self,
+        account_id: str,
+        job_id: int | None = None,
+        project_id: int | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
         params: dict[str, Any] = {"limit": limit, "order_by": "-finished_at"}
         if job_id:
             params["job_definition_id"] = job_id
+        if project_id:
+            params["project_id"] = project_id
         return self._data(self._get_json(f"/v2/accounts/{account_id}/runs/", params=params)) or []
 
     def get_run(self, account_id: str, run_id: int) -> dict:
@@ -154,8 +187,14 @@ class DbtClient:
         """Download a single run artifact (manifest.json, catalog.json, ...).
 
         Artifacts are returned as raw JSON (not wrapped in a ``data`` envelope).
+        The artifact endpoint rejects ``Accept: application/json`` with a 406, so we
+        override the Accept header to ``*/*`` for this request only.
         """
-        resp = self._request("GET", f"/v2/accounts/{account_id}/runs/{run_id}/artifacts/{path}")
+        resp = self._request(
+            "GET",
+            f"/v2/accounts/{account_id}/runs/{run_id}/artifacts/{path}",
+            headers={"Accept": "*/*"},
+        )
         try:
             return resp.json()
         except ValueError as exc:

@@ -17,8 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connectors are excluded only by `--skip-paused`.
 - Column `key_constraint` field (`primary_key` | `primary_or_foreign_key` | `null`)
   on normalized Fivetran columns and warehouse-object columns.
+- dbt extraction scoping: `--project-id` and `--job-id` on `dbt extract`, and
+  `--dbt-project-id` / `--dbt-job-id` on `build` (threaded through the pipeline and
+  extractor). Essential for large/shared dbt accounts where an unscoped run would
+  grab artifacts from an unrelated project.
+- dbt Admin API pagination (limit/offset) for `list_projects`, `list_environments`,
+  and `list_jobs`, which previously truncated silently at 100.
 
 ### Fixed
+- **dbt artifact download returned 406.** The run-artifact endpoint rejects
+  `Accept: application/json`; `get_run_artifact` now sends `Accept: */*` for that
+  request only. Without this, every dbt artifact (manifest/catalog/run_results)
+  failed to download. Verified live against real dbt Cloud runs.
 - **Primary key detection.** Fivetran's config API does not return `is_primary_key`;
   key columns are locked via `enabled_patch_settings` (`reason_code: SYSTEM_COLUMN`
   with a primary-key reason). The normalizer now derives PKs from this, so

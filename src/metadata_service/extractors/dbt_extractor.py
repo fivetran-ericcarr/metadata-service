@@ -29,15 +29,41 @@ class DbtExtractor:
         self._client = client
         self._account_id = account_id
 
-    def extract(self, *, run_limit: int = 50) -> dict:
-        """Extract dbt projects/jobs/runs and download artifacts from recent runs."""
+    def extract(
+        self,
+        *,
+        run_limit: int = 50,
+        project_id: int | None = None,
+        job_id: int | None = None,
+    ) -> dict:
+        """Extract dbt projects/jobs/runs and download artifacts from recent runs.
+
+        Scoping (important for large/shared accounts):
+        - ``project_id``: limit projects/environments/jobs/runs to one project.
+        - ``job_id``: pull artifacts from a specific deployment job's recent runs.
+        """
         errors: list[dict] = []
-        logger.info("dbt extraction starting (account_id=%s)", self._account_id)
+        logger.info(
+            "dbt extraction starting (account_id=%s, project_id=%s, job_id=%s)",
+            self._account_id, project_id, job_id,
+        )
 
         projects = self._safe(lambda: self._client.list_projects(self._account_id), errors, "projects") or []
-        environments = self._safe(lambda: self._client.list_environments(self._account_id), errors, "environments") or []
-        jobs = self._safe(lambda: self._client.list_jobs(self._account_id), errors, "jobs") or []
-        runs = self._safe(lambda: self._client.list_runs(self._account_id, limit=run_limit), errors, "runs") or []
+        if project_id is not None:
+            projects = [p for p in projects if p.get("id") == project_id]
+        environments = self._safe(
+            lambda: self._client.list_environments(self._account_id, project_id=project_id), errors, "environments"
+        ) or []
+        jobs = self._safe(
+            lambda: self._client.list_jobs(self._account_id, project_id=project_id), errors, "jobs"
+        ) or []
+        runs = self._safe(
+            lambda: self._client.list_runs(
+                self._account_id, job_id=job_id, project_id=project_id, limit=run_limit
+            ),
+            errors,
+            "runs",
+        ) or []
 
         artifacts = self._download_from_recent_success(runs, errors)
 

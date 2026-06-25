@@ -30,6 +30,8 @@ def build_metadata(
     aliases: dict | None = None,
     connected_only: bool = False,
     skip_paused: bool = False,
+    dbt_project_id: int | None = None,
+    dbt_job_id: int | None = None,
 ) -> dict:
     """Run extraction + normalization and return the normalized document."""
     if fixtures_dir:
@@ -40,7 +42,11 @@ def build_metadata(
             if include_fivetran
             else _empty_fivetran()
         )
-        dbt_raw = _extract_dbt(settings) if include_dbt else _empty_dbt()
+        dbt_raw = (
+            _extract_dbt(settings, project_id=dbt_project_id, job_id=dbt_job_id)
+            if include_dbt
+            else _empty_dbt()
+        )
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
@@ -64,6 +70,8 @@ def build_and_store(
     aliases: dict | None = None,
     connected_only: bool = False,
     skip_paused: bool = False,
+    dbt_project_id: int | None = None,
+    dbt_job_id: int | None = None,
 ) -> dict:
     """Build metadata, attach drift vs. the previous snapshot, persist, and return
     a summary ``{status, snapshot_uri, generated_at, object_count, error_count, doc}``.
@@ -82,6 +90,8 @@ def build_and_store(
         aliases=aliases,
         connected_only=connected_only,
         skip_paused=skip_paused,
+        dbt_project_id=dbt_project_id,
+        dbt_job_id=dbt_job_id,
     )
     doc["schema_drift"] = detect_drift(previous, doc)
     uri = storage.write_snapshot(doc)
@@ -112,10 +122,12 @@ def _extract_fivetran(
         )
 
 
-def _extract_dbt(settings: Settings) -> dict:
+def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: int | None = None) -> dict:
     settings.require_dbt()
     with DbtClient(settings) as client:
-        return DbtExtractor(client, settings.dbt_account_id or "").extract()
+        return DbtExtractor(client, settings.dbt_account_id or "").extract(
+            project_id=project_id, job_id=job_id
+        )
 
 
 def _empty_fivetran() -> dict:

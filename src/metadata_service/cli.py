@@ -55,12 +55,19 @@ def fivetran_extract(
 
 
 @dbt_app.command("extract")
-def dbt_extract(out: str = typer.Option("dbt_raw_latest.json", "--out")) -> None:
+def dbt_extract(
+    project_id: int | None = typer.Option(None, "--project-id", help="Scope to a dbt project id."),
+    job_id: int | None = typer.Option(None, "--job-id", help="Pull artifacts from a specific job's recent runs."),
+    run_limit: int = typer.Option(50, "--run-limit", help="How many recent runs to consider for artifacts."),
+    out: str = typer.Option("dbt_raw_latest.json", "--out"),
+) -> None:
     """Pull raw dbt metadata and write dbt_raw_latest.json."""
     settings = get_settings()
     settings.require_dbt()
     with DbtClient(settings) as client:
-        raw = DbtExtractor(client, settings.dbt_account_id or "").extract()
+        raw = DbtExtractor(client, settings.dbt_account_id or "").extract(
+            run_limit=run_limit, project_id=project_id, job_id=job_id
+        )
     _write_json(out, raw)
 
 
@@ -78,6 +85,8 @@ def build(
     skip_paused: bool = typer.Option(
         False, "--skip-paused", help="Skip paused connections (paused flag or sync_state=paused)."
     ),
+    dbt_project_id: int | None = typer.Option(None, "--dbt-project-id", help="Scope dbt extraction to a project id."),
+    dbt_job_id: int | None = typer.Option(None, "--dbt-job-id", help="Pull dbt artifacts from a specific job id."),
     write_latest: bool = typer.Option(True, "--write-latest/--no-write-latest"),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
@@ -90,6 +99,8 @@ def build(
         fixtures_dir=fixtures_dir,
         connected_only=connected_only,
         skip_paused=skip_paused,
+        dbt_project_id=dbt_project_id,
+        dbt_job_id=dbt_job_id,
     )
     summary = {k: v for k, v in result.items() if k != "doc"}
     summary["drift_count"] = len(result["doc"].get("schema_drift", []))
