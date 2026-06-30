@@ -20,7 +20,7 @@ def test_primary_key_recommends_not_null_and_unique(built_doc):
     assert ("not_null", "id") in pk_tests
     assert ("unique", "id") in pk_tests
     for r in recs:
-        if r.get("test_name") in {"not_null", "unique"}:
+        if r.get("test_name") in {"not_null", "unique"} and r["target"].get("column") == "id":
             assert r["confidence"] == "high"
             assert r["source"] == "fivetran_metadata"
 
@@ -69,6 +69,60 @@ def test_accepted_values_heuristic_on_categorical_column():
     recs = recommend_for_object(obj)
     av = [r for r in recs if r.get("test_name") == "accepted_values"]
     assert av and av[0]["confidence"] == "heuristic"
+
+
+def _obj(columns, *, match="exact_schema_table", dbt=None):
+    return {
+        "object_id": "warehouse://unknown/s/t", "schema": "s", "name": "t",
+        "origin": {"enabled": True}, "match_confidence": match,
+        "dbt": dbt if dbt is not None else {"source_unique_id": "source.x", "tests": [], "freshness": {"status": "pass"}},
+        "columns": columns,
+    }
+
+
+def test_potential_pii_signal_when_not_hashed():
+    recs = recommend_for_object(_obj([
+        {"name": "customer_email", "source_name": "Email", "hashed": False, "dbt_tests": []},
+    ]))
+    pii = [r for r in recs if r.get("signal") == "potential_pii"]
+    assert pii and pii[0]["target"]["column"] == "customer_email"
+    assert pii[0]["confidence"] == "heuristic"
+
+
+def test_pii_not_flagged_when_hashed():
+    recs = recommend_for_object(_obj([
+        {"name": "ssn", "source_name": "SSN", "hashed": True, "dbt_tests": []},
+    ]))
+    assert not any(r.get("signal") == "potential_pii" for r in recs)
+    assert any(r.get("signal") == "hashed_column" for r in recs)
+
+
+def test_boolean_accepted_values():
+    recs = recommend_for_object(_obj([
+        {"name": "is_active", "source_name": "IsActive", "hashed": False, "dbt_tests": []},
+    ]))
+    av = [r for r in recs if r.get("test_name") == "accepted_values"]
+    assert av and av[0]["target"].get("values") == [True, False]
+
+
+def test_natural_key_uniqueness():
+    recs = recommend_for_object(_obj([
+        {"name": "email", "source_name": "Email", "hashed": False, "is_primary_key": False, "dbt_tests": []},
+    ]))
+    uniq = [r for r in recs if r.get("test_name") == "unique" and r["target"].get("column") == "email"]
+    assert uniq and uniq[0]["confidence"] == "heuristic"
+
+
+def test_untested_matched_object_risk():
+    recs = recommend_for_object(_obj([], dbt={"source_unique_id": "source.x", "model_unique_ids": ["m"], "tests": []}))
+    assert any(r.get("risk") == "untested_dbt_object" and r["severity"] == "medium" for r in recs)
+
+
+def test_matched_object_with_tests_not_flagged_untested():
+    dbt = {"source_unique_id": "source.x", "model_unique_ids": ["m"],
+           "tests": [{"test_type": "not_null", "status": "success"}], "freshness": {"status": "pass"}}
+    recs = recommend_for_object(_obj([], dbt=dbt))
+    assert not any(r.get("risk") == "untested_dbt_object" for r in recs)
 
 
 def test_stale_sync_risk():

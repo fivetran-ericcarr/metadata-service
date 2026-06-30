@@ -313,9 +313,13 @@ Risk values: `missing_dbt_coverage` (medium), `failing_dbt_tests` (high),
 | `dbt_utils.unique_combination_of_columns` (composite PK) | `dbt_test` | `high` |
 | `source_freshness` when a matched source lacks freshness | `dbt_test` | `medium` |
 | `accepted_values` on a categorical-looking column | `dbt_test` | `heuristic` |
+| `accepted_values` `[true,false]` on an `is_`/`has_` column | `dbt_test` | `heuristic` |
 | `relationships` on a non-PK `*_id` column | `dbt_test` | `heuristic` |
+| `unique` on a natural-key column (`email`, `username`, `slug`, `uuid`, …) | `dbt_test` | `heuristic` |
 | `hashed_column` | `signal` | — |
-| `missing_dbt_coverage` | `risk` | `medium` |
+| `potential_pii` (PII-suggestive column name, not hashed) | `signal` | `heuristic` |
+| `missing_dbt_coverage` (unmatched, enabled) | `risk` | `medium` |
+| `untested_dbt_object` (matched to dbt but no tests) | `risk` | `medium` |
 | `failing_dbt_tests` | `risk` | `high` |
 | `stale_fivetran_sync` | `risk` | `high` (threshold `STALE_SYNC_THRESHOLD_HOURS`, default 24h) |
 

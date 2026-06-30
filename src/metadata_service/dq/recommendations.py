@@ -18,6 +18,15 @@ from ..models.common import CONFIDENCE_HEURISTIC, CONFIDENCE_HIGH, CONFIDENCE_ME
 
 _FAILING_STATUSES = {"fail", "error", "runtime error"}
 _CATEGORICAL_TOKENS = {"status", "type", "category", "kind", "state", "stage"}
+_BOOLEAN_PREFIXES = ("is_", "has_")
+# Distinctive substrings that suggest a column holds personal / sensitive data.
+_PII_TOKENS = (
+    "email", "ssn", "social_security", "phone", "birth", "dob", "passport",
+    "credit_card", "card_number", "ip_address", "routing_number", "account_number",
+    "salary", "postal_code", "zipcode", "national_id", "tax_id", "drivers_license",
+)
+# Column names that commonly act as natural keys (worth a uniqueness test).
+_NATURAL_KEY_NAMES = {"email", "username", "slug", "uuid", "guid", "external_id"}
 
 
 def generate_recommendations(warehouse_objects: list[dict], *, stale_threshold_hours: int = 24,
@@ -91,7 +100,7 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
         existing = {t.lower() for t in (col.get("dbt_tests") or [])}
         col_target = {**target_base, "column": name}
 
-        # Accepted values (heuristic)
+        # Accepted values (heuristic): categorical-named, else boolean-style.
         if _looks_categorical(lowered) and "accepted_values" not in existing:
             recs.append({
                 "object_id": object_id,
@@ -99,6 +108,16 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
                 "test_name": "accepted_values",
                 "target": dict(col_target),
                 "reason": "Column name suggests a categorical field.",
+                "confidence": CONFIDENCE_HEURISTIC,
+                "source": "heuristic",
+            })
+        elif lowered.startswith(_BOOLEAN_PREFIXES) and "accepted_values" not in existing:
+            recs.append({
+                "object_id": object_id,
+                "recommendation_type": "dbt_test",
+                "test_name": "accepted_values",
+                "target": {**col_target, "values": [True, False]},
+                "reason": "Column name suggests a boolean flag.",
                 "confidence": CONFIDENCE_HEURISTIC,
                 "source": "heuristic",
             })
@@ -115,6 +134,19 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
                 "source": "heuristic",
             })
 
+        # Natural-key uniqueness (heuristic) — skip hashed (can't reason about it).
+        if (lowered in _NATURAL_KEY_NAMES and not col.get("is_primary_key")
+                and not col.get("hashed") and "unique" not in existing):
+            recs.append({
+                "object_id": object_id,
+                "recommendation_type": "dbt_test",
+                "test_name": "unique",
+                "target": dict(col_target),
+                "reason": "Column name suggests a natural key.",
+                "confidence": CONFIDENCE_HEURISTIC,
+                "source": "heuristic",
+            })
+
         # Hashed / sensitive columns
         if col.get("hashed"):
             recs.append({
@@ -125,15 +157,40 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
                 "recommended_action": "Verify downstream models do not expect the raw value.",
             })
 
+        # Potential PII (heuristic) — name-based, only when NOT already hashed.
+        elif any(tok in lowered for tok in _PII_TOKENS):
+            recs.append({
+                "object_id": object_id,
+                "recommendation_type": "signal",
+                "signal": "potential_pii",
+                "target": dict(col_target),
+                "recommended_action": "Column name suggests PII; review for masking/hashing and access controls.",
+                "confidence": CONFIDENCE_HEURISTIC,
+            })
+
     # --- Object-level risks ----------------------------------------------
     match_confidence = obj.get("match_confidence")
-    if match_confidence in (None, "unmatched") and obj.get("origin", {}).get("enabled", True):
+    is_matched = match_confidence not in (None, "unmatched")
+    if not is_matched and obj.get("origin", {}).get("enabled", True):
         recs.append({
             "object_id": object_id,
             "recommendation_type": "risk",
             "risk": "missing_dbt_coverage",
             "severity": "medium",
             "reason": "Table is enabled in Fivetran but no dbt source or model match exists.",
+            "target": dict(target_base),
+        })
+
+    # Matched to dbt but carrying no tests at all — a real coverage gap distinct
+    # from a fully unmatched table.
+    has_dbt = dbt_section.get("source_unique_id") or dbt_section.get("model_unique_ids")
+    if is_matched and has_dbt and not (dbt_section.get("tests") or []):
+        recs.append({
+            "object_id": object_id,
+            "recommendation_type": "risk",
+            "risk": "untested_dbt_object",
+            "severity": "medium",
+            "reason": "Object is modeled in dbt but has no tests.",
             "target": dict(target_base),
         })
 

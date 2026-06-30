@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Changed
+- DQ recommendation rules: `potential_pii` signal (PII-suggestive, non-hashed
+  column names), `unique` on natural-key names (`email`/`username`/`slug`/`uuid`/…),
+  `accepted_values [true,false]` on `is_`/`has_` columns, and an `untested_dbt_object`
+  risk (matched to dbt but zero tests). Verified live: flagged commit author/committer
+  emails as PII on the GitHub build.
 - Fivetran connection filters `--connected-only` / `--skip-paused` on `fivetran
   extract` and `build` (`--connected-only` filters on `setup_state`; paused-but-
   connected connectors are excluded only by `--skip-paused`).
