@@ -52,6 +52,17 @@ def test_unmatched_table_flagged(built_doc):
     assert risks and risks[0]["severity"] == "medium"
 
 
+def test_configured_alias_match(settings, fivetran_normalized, dbt_normalized):
+    """An aliases map activates the configured_alias tier for non-matching names."""
+    from metadata_service.normalizers import CombinedNormalizer
+
+    aliases = {"salesforce.contact": "salesforce.account"}
+    doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_normalized, dbt_normalized)
+    contact = object_by_table(doc, "salesforce", "contact")
+    assert contact["match_confidence"] == "configured_alias"
+    assert contact["dbt"]["source_unique_id"] == "source.demo.salesforce.account"
+
+
 def test_build_from_fixtures_conforms_to_contract(settings, fixtures_dir):
     doc = build_metadata(settings, fixtures_dir=str(fixtures_dir))
     assert doc["version"] == "1.0"

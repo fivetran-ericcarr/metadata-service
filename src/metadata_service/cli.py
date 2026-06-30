@@ -87,10 +87,16 @@ def build(
     ),
     dbt_project_id: int | None = typer.Option(None, "--dbt-project-id", help="Scope dbt extraction to a project id."),
     dbt_job_id: int | None = typer.Option(None, "--dbt-job-id", help="Pull dbt artifacts from a specific job id."),
+    aliases_file: str | None = typer.Option(
+        None, "--aliases-file",
+        help="JSON map of '<dest_schema>.<dest_table>': '<dbt_schema>.<dbt_table>' "
+             "for the configured_alias match tier.",
+    ),
     write_latest: bool = typer.Option(True, "--write-latest/--no-write-latest"),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
     settings = get_settings()
+    aliases = json.loads(Path(aliases_file).read_text(encoding="utf-8")) if aliases_file else None
     result = build_and_store(
         settings,
         group_id=group_id,
@@ -101,6 +107,7 @@ def build(
         skip_paused=skip_paused,
         dbt_project_id=dbt_project_id,
         dbt_job_id=dbt_job_id,
+        aliases=aliases,
     )
     summary = {k: v for k, v in result.items() if k != "doc"}
     summary["drift_count"] = len(result["doc"].get("schema_drift", []))

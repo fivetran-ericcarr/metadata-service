@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Changed
+- `build --aliases-file <json>` activates the `configured_alias` match tier from a
+  `{"<dest_schema>.<dest_table>": "<dbt_schema>.<dbt_table>"}` map (see
+  `examples/aliases.example.json`) — previously reachable only in code.
 - DQ recommendation rules: `potential_pii` signal (PII-suggestive, non-hashed
   column names), `unique` on natural-key names (`email`/`username`/`slug`/`uuid`/…),
   `accepted_values [true,false]` on `is_`/`has_` columns, and an `untested_dbt_object`

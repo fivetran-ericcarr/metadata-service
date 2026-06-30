@@ -1,0 +1,5 @@
+{
+  "_comment": "Map a Fivetran destination '<schema>.<table>' to a dbt '<schema>.<table>' when names don't line up. Used by: metadata-service build --aliases-file examples/aliases.example.json",
+  "salesforce.contact": "salesforce.account",
+  "healthcare_test_financial_services.fpr_records": "analytics.fpr_records"
+}

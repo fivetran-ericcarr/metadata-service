@@ -290,12 +290,17 @@ that Protocol and wiring it into `get_storage`.
 
 ## 11. Extension Points
 
+- **Matching**: supply an aliases map via `build --aliases-file <json>` (a
+  `{"<dest_schema>.<dest_table>": "<dbt_schema>.<dbt_table>"}` map — see
+  [`examples/aliases.example.json`](examples/aliases.example.json)) to activate the
+  `configured_alias` tier, or extend `_match` for warehouse-aware matching.
+- **Recommendations**: add rules in `dq/recommendations.py` (PII, natural keys,
+  boolean accepted-values, untested objects, etc. ship today).
 - **Storage**: implement `MetadataStorage` (e.g., GCS, Azure Blob).
-- **Matching**: pass an `aliases` dict to `CombinedNormalizer`, or extend
-  `_match` for warehouse-aware relation matching.
-- **Recommendations**: add rules in `dq/recommendations.py`.
 - **Drift**: add change types + severities in `dq/drift.py`.
 - **dbt Discovery API**: use `DbtClient.query_discovery` for richer lineage.
+- **Authoritative PKs / lineage**: read the Fivetran Platform Connector's
+  `fivetran_metadata` schema from the destination warehouse (planned).
 
 ## How Capgemini Plugs This In
 
