@@ -37,6 +37,7 @@ class DbtNormalizer:
 
         self._attach_tests(tests, models, sources)
         lineage_edges = self._build_lineage(manifest_nodes, manifest_exposures)
+        exposures = self._build_exposures(manifest_exposures)
 
         return {
             "extracted_at": raw.get("extracted_at"),
@@ -47,9 +48,30 @@ class DbtNormalizer:
             "models": models,
             "sources": sources,
             "tests": tests,
+            "exposures": exposures,
             "lineage_edges": lineage_edges,
             "errors": warnings,
         }
+
+    @staticmethod
+    def _build_exposures(exposures: dict) -> list[dict]:
+        out = []
+        for uid, exp in (exposures or {}).items():
+            exp = exp or {}
+            owner = exp.get("owner") or {}
+            out.append({
+                "unique_id": uid,
+                "name": exp.get("name"),
+                "label": exp.get("label"),
+                "type": exp.get("type"),
+                "maturity": exp.get("maturity"),
+                "url": exp.get("url"),
+                "description": exp.get("description"),
+                "owner_name": owner.get("name"),
+                "owner_email": owner.get("email"),
+                "depends_on": (exp.get("depends_on") or {}).get("nodes") or [],
+            })
+        return out
 
     # -- indexes ----------------------------------------------------------
     @staticmethod

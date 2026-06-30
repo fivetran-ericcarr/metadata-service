@@ -162,6 +162,24 @@ def list_warehouse_objects(
     return {"count": total, "returned": len(rows), "objects": rows}
 
 
+def get_impact(schema: str, table: str, settings: Settings | None = None) -> dict:
+    """Blast radius for an object: downstream dbt models and the exposures
+    (dashboards/ML/apps) that depend on it. Answers 'what breaks if this is wrong?'."""
+    settings = settings or get_settings()
+    obj = get_warehouse_object(schema, table, settings=settings)
+    if not obj.get("name"):
+        return obj
+    dbt = obj.get("dbt", {})
+    return {
+        "object_id": obj.get("object_id"),
+        "schema": obj.get("schema"),
+        "name": obj.get("name"),
+        "downstream_models": dbt.get("model_unique_ids", []),
+        "exposures": dbt.get("exposures", []),
+        "has_failing_tests": (obj.get("dq_summary", {}) or {}).get("failing_tests_count", 0) > 0,
+    }
+
+
 def get_dq_summary(settings: Settings | None = None) -> dict:
     """Account-level DQ rollup — the orienting call an agent makes first."""
     settings = settings or get_settings()

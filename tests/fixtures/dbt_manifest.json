@@ -111,6 +111,11 @@
     "exposure.demo.account_dashboard": {
       "resource_type": "exposure",
       "name": "account_dashboard",
+      "label": "Account Dashboard",
+      "type": "dashboard",
+      "maturity": "high",
+      "url": "https://bi.example.com/account",
+      "owner": { "name": "Analytics", "email": "analytics@example.com" },
       "depends_on": { "nodes": ["model.demo.dim_account"] }
     }
   }

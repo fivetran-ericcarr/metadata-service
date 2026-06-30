@@ -52,6 +52,22 @@ def test_unmatched_table_flagged(built_doc):
     assert risks and risks[0]["severity"] == "medium"
 
 
+def test_exposures_attached_and_impact_risk(built_doc):
+    account = object_by_table(built_doc, "salesforce", "account")
+    exposures = account["dbt"]["exposures"]
+    assert any(e["name"] == "account_dashboard" and e["type"] == "dashboard" for e in exposures)
+    # account has a failing test AND feeds an exposure -> business-impact risk
+    recs = [r for r in built_doc["dq_recommendations"]
+            if r["object_id"] == account["object_id"] and r.get("risk") == "impacts_exposure"]
+    assert recs and recs[0]["severity"] == "high"
+    assert recs[0]["details"]["exposures"][0]["name"] == "account_dashboard"
+
+
+def test_unmatched_object_has_no_exposures(built_doc):
+    contact = object_by_table(built_doc, "salesforce", "contact")
+    assert contact["dbt"]["exposures"] == []
+
+
 def test_configured_alias_match(settings, fivetran_normalized, dbt_normalized):
     """An aliases map activates the configured_alias tier for non-matching names."""
     from metadata_service.normalizers import CombinedNormalizer

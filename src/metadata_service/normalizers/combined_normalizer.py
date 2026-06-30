@@ -38,6 +38,7 @@ class CombinedNormalizer:
 
         models = dbt_normalized.get("models") or []
         sources = dbt_normalized.get("sources") or []
+        exposures = dbt_normalized.get("exposures") or []
         lineage = LineageGraph(dbt_normalized.get("lineage_edges"))
 
         source_index = _index_dbt(sources, id_field="identifier", name_field="table_name")
@@ -52,7 +53,7 @@ class CombinedNormalizer:
             for table in conn.get("tables", []) or []:
                 obj = self._build_object(
                     conn, table, source_index, model_index,
-                    sources_by_uid, models_by_uid, lineage,
+                    sources_by_uid, models_by_uid, lineage, exposures,
                 )
                 recs = recommend_for_object(obj, stale_threshold_hours=self._stale_hours)
                 self._apply_recommendations(obj, recs)
@@ -79,6 +80,7 @@ class CombinedNormalizer:
                     "models": models,
                     "sources": sources,
                     "tests": dbt_normalized.get("tests") or [],
+                    "exposures": exposures,
                     "lineage_edges": dbt_normalized.get("lineage_edges") or [],
                 },
             },
@@ -90,7 +92,7 @@ class CombinedNormalizer:
 
     # -- per-object -------------------------------------------------------
     def _build_object(self, conn, table, source_index, model_index,
-                      sources_by_uid, models_by_uid, lineage) -> dict:
+                      sources_by_uid, models_by_uid, lineage, exposures=None) -> dict:
         dest_schema = table.get("destination_schema")
         dest_table = table.get("destination_table")
         object_id = build_object_id(None, dest_schema, dest_table, warehouse=self._warehouse)
@@ -110,6 +112,7 @@ class CombinedNormalizer:
 
         object_tests = self._collect_tests(source_obj, model_uids, models_by_uid)
         freshness = self._freshness(source_obj)
+        object_exposures = self._collect_exposures(source_uid, model_uids, exposures)
 
         columns = self._build_columns(table, source_obj, model_uids, models_by_uid, object_tests)
 
@@ -134,6 +137,7 @@ class CombinedNormalizer:
                 "source_unique_id": source_uid,
                 "model_unique_ids": model_uids,
                 "tests": object_tests,
+                "exposures": object_exposures,
                 "freshness": freshness,
             },
             "columns": columns,
@@ -161,6 +165,27 @@ class CombinedNormalizer:
             return index["ci"][ci_key], MATCH_CASE_INSENSITIVE, ["matched case-insensitively"]
 
         return None, MATCH_UNMATCHED, []
+
+    @staticmethod
+    def _collect_exposures(source_uid, model_uids, exposures) -> list[dict]:
+        """Exposures whose lineage touches this object's source or downstream models."""
+        if not exposures:
+            return []
+        owned = set(model_uids)
+        if source_uid:
+            owned.add(source_uid)
+        out: list[dict] = []
+        for exp in exposures:
+            if set(exp.get("depends_on") or []) & owned:
+                out.append({
+                    "name": exp.get("name"),
+                    "label": exp.get("label"),
+                    "type": exp.get("type"),
+                    "maturity": exp.get("maturity"),
+                    "url": exp.get("url"),
+                    "owner_name": exp.get("owner_name"),
+                })
+        return out
 
     @staticmethod
     def _collect_tests(source_obj, model_uids, models_by_uid) -> list[dict]:

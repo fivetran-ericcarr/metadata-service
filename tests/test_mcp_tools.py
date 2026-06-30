@@ -65,3 +65,10 @@ def test_get_warehouse_object_detail_still_works(seeded_settings):
     o = tools.get_warehouse_object("salesforce", "account", settings=seeded_settings)
     assert o["name"] == "account"
     assert o["dbt"]["source_unique_id"]
+
+
+def test_get_impact_returns_blast_radius(seeded_settings):
+    impact = tools.get_impact("salesforce", "account", settings=seeded_settings)
+    assert impact["name"] == "account"
+    assert impact["downstream_models"]
+    assert any(e["name"] == "account_dashboard" for e in impact["exposures"])

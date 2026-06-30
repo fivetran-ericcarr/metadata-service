@@ -205,7 +205,8 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
         })
 
     last_sync = (obj.get("origin") or {}).get("last_successful_sync")
-    if _is_stale(last_sync, stale_threshold_hours, now=now):
+    stale = _is_stale(last_sync, stale_threshold_hours, now=now)
+    if stale:
         recs.append({
             "object_id": object_id,
             "recommendation_type": "risk",
@@ -213,6 +214,22 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
             "severity": "high",
             "reason": f"Last successful Fivetran sync is older than {stale_threshold_hours}h.",
             "target": dict(target_base),
+        })
+
+    # Business impact: a DQ problem on this object reaches downstream consumers.
+    exposures = dbt_section.get("exposures") or []
+    if exposures and (_has_failing_tests(dbt_section) or stale or not is_matched):
+        recs.append({
+            "object_id": object_id,
+            "recommendation_type": "risk",
+            "risk": "impacts_exposure",
+            "severity": "high",
+            "reason": "A data-quality problem on this object affects downstream exposures.",
+            "target": dict(target_base),
+            "details": {"exposures": [
+                {"name": e.get("name"), "type": e.get("type"), "maturity": e.get("maturity")}
+                for e in exposures
+            ]},
         })
 
     return recs

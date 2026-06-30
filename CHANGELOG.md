@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- **dbt exposures → blast radius**: the dbt normalizer extracts exposures
+  (type/maturity/owner/url); warehouse objects gain `dbt.exposures` (the
+  dashboards/ML/apps they feed via lineage); an `impacts_exposure` risk (high) fires
+  when a DQ problem reaches a consumer; new `get_impact(schema, table)` MCP tool
+  returns blast radius. Verified live (GitHub dashboard + ML exposures).
 - **Warehouse metadata reader** (`warehouse/`) — reads authoritative primary keys
   from the Fivetran Platform Connector's `fivetran_metadata` schema in a Snowflake
   destination and overrides PK flags during `build` (incl. composite keys), tagging

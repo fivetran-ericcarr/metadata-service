@@ -67,6 +67,12 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
         return tools.get_warehouse_object(schema, table)
 
     @server.tool()
+    def get_impact(schema: str, table: str) -> dict:
+        """Blast radius for an object: downstream dbt models + exposures
+        (dashboards/ML/apps) that depend on it. 'What breaks if this is wrong?'"""
+        return tools.get_impact(schema, table)
+
+    @server.tool()
     def get_dq_recommendations(
         schema: str | None = None,
         table: str | None = None,
