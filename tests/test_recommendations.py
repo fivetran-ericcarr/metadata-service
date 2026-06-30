@@ -125,6 +125,31 @@ def test_matched_object_with_tests_not_flagged_untested():
     assert not any(r.get("risk") == "untested_dbt_object" for r in recs)
 
 
+def test_governance_risks_missing_contract_and_unowned():
+    obj = _obj([], dbt={
+        "source_unique_id": "source.x", "model_unique_ids": ["m"], "tests": [{"status": "success"}],
+        "freshness": {"status": "pass"},
+        "governance": {"has_enforced_contract": False, "owners": [], "groups": [],
+                       "uncontracted_public_models": ["m"]},
+    })
+    recs = recommend_for_object(obj)
+    risks = {r["risk"]: r for r in recs if r["recommendation_type"] == "risk"}
+    assert risks["missing_model_contract"]["severity"] == "high"  # public + no contract
+    assert "unowned_object" in risks
+
+
+def test_governed_object_has_no_governance_risk():
+    obj = _obj([], dbt={
+        "source_unique_id": "source.x", "model_unique_ids": ["m"], "tests": [{"status": "success"}],
+        "freshness": {"status": "pass"},
+        "governance": {"has_enforced_contract": True, "owners": ["Team"], "groups": ["analytics"],
+                       "uncontracted_public_models": []},
+    })
+    risks = {r.get("risk") for r in recommend_for_object(obj)}
+    assert "missing_model_contract" not in risks
+    assert "unowned_object" not in risks
+
+
 def test_stale_sync_risk():
     obj = {
         "object_id": "warehouse://unknown/s/t",

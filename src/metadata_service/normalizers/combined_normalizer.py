@@ -122,6 +122,7 @@ class CombinedNormalizer:
         freshness = self._freshness(source_obj)
         object_exposures = self._collect_exposures(source_uid, model_uids, exposures)
         object_metrics = self._collect_metrics(model_uids, metrics)
+        governance = self._collect_governance(model_uids, models_by_uid)
 
         columns = self._build_columns(table, source_obj, model_uids, models_by_uid, object_tests)
 
@@ -148,6 +149,7 @@ class CombinedNormalizer:
                 "tests": object_tests,
                 "exposures": object_exposures,
                 "metrics": object_metrics,
+                "governance": governance,
                 "freshness": freshness,
             },
             "columns": columns,
@@ -196,6 +198,32 @@ class CombinedNormalizer:
                     "owner_name": exp.get("owner_name"),
                 })
         return out
+
+    @staticmethod
+    def _collect_governance(model_uids, models_by_uid) -> dict:
+        """Aggregate dbt governance across the object's downstream models."""
+        owners, groups, accesses = set(), set(), set()
+        has_contract = False
+        uncontracted_public = []
+        for uid in model_uids:
+            g = (models_by_uid.get(uid) or {}).get("governance") or {}
+            if g.get("owner"):
+                owners.add(g["owner"])
+            if g.get("group"):
+                groups.add(g["group"])
+            if g.get("access"):
+                accesses.add(g["access"])
+            if g.get("contract_enforced"):
+                has_contract = True
+            elif g.get("access") == "public":
+                uncontracted_public.append(uid)
+        return {
+            "has_enforced_contract": has_contract,
+            "owners": sorted(owners),
+            "groups": sorted(groups),
+            "access_levels": sorted(accesses),
+            "uncontracted_public_models": uncontracted_public,
+        }
 
     @staticmethod
     def _collect_metrics(model_uids, metrics) -> list[dict]:

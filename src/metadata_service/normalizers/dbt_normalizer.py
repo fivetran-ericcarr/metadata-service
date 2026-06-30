@@ -183,12 +183,27 @@ class DbtNormalizer:
                         "tests": [],
                         "latest_status": status.get("status"),
                         "execution_time": status.get("execution_time"),
+                        "governance": self._governance(node, config),
                     }
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 warnings.append({"source": "dbt", "unique_id": uid, "error_type": type(exc).__name__,
                                  "error_message": f"Failed to normalize model: {exc}"})
         return models
+
+    @staticmethod
+    def _governance(node: dict, config: dict) -> dict:
+        meta = node.get("meta") or config.get("meta") or {}
+        contract = node.get("contract") or config.get("contract") or {}
+        return {
+            "access": node.get("access") or config.get("access"),
+            "group": node.get("group") or config.get("group"),
+            "version": node.get("version"),
+            "latest_version": node.get("latest_version"),
+            "contract_enforced": bool(contract.get("enforced")),
+            "constraint_count": len(node.get("constraints") or []),
+            "owner": meta.get("owner"),
+        }
 
     def _build_sources(self, sources: dict, freshness: dict, warnings: list) -> list[dict]:
         out = []

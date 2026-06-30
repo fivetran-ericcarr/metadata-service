@@ -77,6 +77,14 @@ def test_metric_quality_and_attachment(built_doc):
     assert recs and recs[0]["details"]["metrics"][0]["name"] == "total_accounts"
 
 
+def test_governance_aggregated_onto_object(built_doc):
+    account = object_by_table(built_doc, "salesforce", "account")
+    gov = account["dbt"]["governance"]
+    assert gov["has_enforced_contract"] is True       # dim_account has an enforced contract
+    assert "Analytics Team" in gov["owners"]
+    assert "public" in gov["access_levels"]
+
+
 def test_unmatched_object_has_no_exposures(built_doc):
     contact = object_by_table(built_doc, "salesforce", "contact")
     assert contact["dbt"]["exposures"] == []

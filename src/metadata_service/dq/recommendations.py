@@ -245,6 +245,29 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
             "details": {"metrics": [{"name": m.get("name"), "type": m.get("type")} for m in metrics]},
         })
 
+    # Governance gaps on matched, modeled objects.
+    governance = dbt_section.get("governance") or {}
+    if is_matched and has_dbt:
+        if not governance.get("has_enforced_contract"):
+            recs.append({
+                "object_id": object_id,
+                "recommendation_type": "risk",
+                "risk": "missing_model_contract",
+                "severity": "high" if governance.get("uncontracted_public_models") else "medium",
+                "reason": "Downstream dbt model(s) have no enforced contract"
+                          + (" and are publicly accessible." if governance.get("uncontracted_public_models") else "."),
+                "target": dict(target_base),
+            })
+        if not governance.get("owners") and not governance.get("groups"):
+            recs.append({
+                "object_id": object_id,
+                "recommendation_type": "risk",
+                "risk": "unowned_object",
+                "severity": "medium",
+                "reason": "Object is modeled in dbt but has no owner or group assigned.",
+                "target": dict(target_base),
+            })
+
     return recs
 
 

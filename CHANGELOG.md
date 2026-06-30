@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- **dbt model governance**: extract per-model contract/access/group/version/owner
+  from the manifest; aggregate `dbt.governance` onto warehouse objects (enforced
+  contract, owners, groups, access levels); `missing_model_contract` risk (high when
+  a downstream model is public + uncontracted) and `unowned_object` risk. Verified
+  live on the GitHub build.
 - **Column-level lineage** (sqlglot): parses compiled model SQL into column→column
   edges (resolving `SELECT *` via the catalog schema and tables via each leaf's
   source expression), exposed as `dbt.column_lineage_edges` plus a

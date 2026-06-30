@@ -32,11 +32,15 @@
       "relation_name": "analytics.marts.dim_account",
       "config": { "materialized": "table" },
       "description": "Account dimension.",
+      "access": "public",
+      "group": "analytics",
+      "contract": { "enforced": true },
+      "constraints": [],
       "columns": {
         "account_id": { "description": "Surrogate account key" }
       },
       "tags": ["marts"],
-      "meta": {},
+      "meta": { "owner": "Analytics Team" },
       "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] },
       "refs": [["stg_salesforce__account"]],
       "sources": []
