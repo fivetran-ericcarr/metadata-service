@@ -1,0 +1,81 @@
+name: Refresh metadata snapshot
+
+# Keeps the snapshot agents read current. Runs daily (after nightly dbt) and on
+# demand. Configure repo Secrets (credentials) + Variables (FIVETRAN_GROUP_ID,
+# DBT_PROJECT_ID) under Settings → Secrets and variables → Actions. Until the
+# credentials are set, scheduled runs no-op (they don't fail).
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        id: guard
+        env:
+          FIVETRAN_API_KEY: ${{ secrets.FIVETRAN_API_KEY }}
+        run: |
+          if [ -n "$FIVETRAN_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping refresh — set repo Secrets to enable."
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install (with warehouse + lineage extras)
+        if: steps.guard.outputs.configured == 'true'
+        run: uv sync --extra warehouse-snowflake --extra lineage
+
+      - name: Write Snowflake key (optional)
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          WAREHOUSE_PRIVATE_KEY: ${{ secrets.WAREHOUSE_PRIVATE_KEY }}
+        run: printf '%s' "$WAREHOUSE_PRIVATE_KEY" > rsa_key.pem
+
+      - name: Build snapshot
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          FIVETRAN_API_KEY: ${{ secrets.FIVETRAN_API_KEY }}
+          FIVETRAN_API_SECRET: ${{ secrets.FIVETRAN_API_SECRET }}
+          DBT_ACCOUNT_ID: ${{ secrets.DBT_ACCOUNT_ID }}
+          DBT_SERVICE_TOKEN: ${{ secrets.DBT_SERVICE_TOKEN }}
+          # Warehouse reader (optional) — leave WAREHOUSE_TYPE unset to skip PK enrichment
+          WAREHOUSE_TYPE: ${{ vars.WAREHOUSE_TYPE }}
+          WAREHOUSE_ACCOUNT: ${{ secrets.WAREHOUSE_ACCOUNT }}
+          WAREHOUSE_USER: ${{ secrets.WAREHOUSE_USER }}
+          WAREHOUSE_ROLE: ${{ secrets.WAREHOUSE_ROLE }}
+          WAREHOUSE_NAME: ${{ secrets.WAREHOUSE_NAME }}
+          WAREHOUSE_DATABASE: ${{ secrets.WAREHOUSE_DATABASE }}
+          WAREHOUSE_PRIVATE_KEY_PATH: rsa_key.pem
+          # S3 publishing (optional) — share the snapshot with a fleet
+          METADATA_STORAGE_BACKEND: ${{ vars.METADATA_STORAGE_BACKEND }}
+          METADATA_S3_BUCKET: ${{ vars.METADATA_S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          uv run metadata-service build \
+            --group-id "${{ vars.FIVETRAN_GROUP_ID }}" \
+            --dbt-project-id "${{ vars.DBT_PROJECT_ID }}" \
+            --connected-only --skip-paused
+
+      - name: Upload snapshot artifact
+        if: steps.guard.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-snapshot
+          path: metadata_snapshots/latest.json
+          retention-days: 14
+
+      - name: Clean up key
+        if: always()
+        run: rm -f rsa_key.pem

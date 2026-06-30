@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- `examples/agent_transcript.md` — a read-through DQ-agent chat (tool calls +
+  answers) over the demo data.
+- `.github/workflows/refresh.yml` — scheduled (daily) + on-demand snapshot refresh
+  via GitHub Actions, with optional warehouse-reader and S3 publishing; documented in
+  the Capgemini quickstart alongside cron/Airflow/dbt-webhook alternatives.
 - **dbt model governance**: extract per-model contract/access/group/version/owner
   from the manifest; aggregate `dbt.governance` onto warehouse objects (enforced
   contract, owners, groups, access levels); `missing_model_contract` risk (high when

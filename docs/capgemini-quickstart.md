@@ -158,9 +158,13 @@ source freshness. The full walkthrough is in
 
 ## 6. Deploying for production
 
-- **Keep the snapshot fresh.** Schedule `metadata-service build ...` (cron / Airflow
-  / dbt Cloud job webhook) after your dbt production runs land. Agents always read
-  the latest snapshot.
+- **Keep the snapshot fresh.** Schedule `metadata-service build ...` after your dbt
+  production runs land, so agents always read the latest snapshot. A ready-to-use
+  **GitHub Actions** workflow ships at [`.github/workflows/refresh.yml`](../.github/workflows/refresh.yml)
+  (daily cron + manual trigger; set credentials as repo Secrets and
+  `FIVETRAN_GROUP_ID`/`DBT_PROJECT_ID` as Variables). Equivalent options: a cron
+  entry running `uv run metadata-service build ...`, an Airflow task, or a dbt Cloud
+  job-completion webhook calling `POST /metadata/refresh`.
 - **Storage.** `local` by default; set `METADATA_STORAGE_BACKEND=s3` (with
   `METADATA_S3_BUCKET`) to share snapshots across a fleet.
 - **Serve.** Run `serve-mcp --transport http` as a long-lived service for hosted
