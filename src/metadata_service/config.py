@@ -64,6 +64,30 @@ class Settings(BaseSettings):
         default=24, alias="STALE_SYNC_THRESHOLD_HOURS"
     )
 
+    # --- Warehouse metadata reader (Fivetran Platform Connector) ----------
+    # Reads authoritative PKs/lineage from the `fivetran_metadata` schema in the
+    # destination. Enabled when WAREHOUSE_TYPE=snowflake and account/database set.
+    warehouse_account: str | None = Field(default=None, alias="WAREHOUSE_ACCOUNT")
+    warehouse_user: str | None = Field(default=None, alias="WAREHOUSE_USER")
+    warehouse_role: str | None = Field(default=None, alias="WAREHOUSE_ROLE")
+    warehouse_name: str | None = Field(default=None, alias="WAREHOUSE_NAME")
+    warehouse_database: str | None = Field(default=None, alias="WAREHOUSE_DATABASE")
+    warehouse_metadata_schema: str = Field(
+        default="fivetran_metadata", alias="WAREHOUSE_METADATA_SCHEMA"
+    )
+    warehouse_private_key_path: str | None = Field(
+        default=None, alias="WAREHOUSE_PRIVATE_KEY_PATH"
+    )
+    warehouse_password: str | None = Field(default=None, alias="WAREHOUSE_PASSWORD")
+
+    def warehouse_reader_enabled(self) -> bool:
+        return bool(
+            (self.warehouse_type or "").lower() == "snowflake"
+            and self.warehouse_account
+            and self.warehouse_database
+            and (self.warehouse_private_key_path or self.warehouse_password)
+        )
+
     def require_fivetran(self) -> None:
         if not self.fivetran_api_key or not self.fivetran_api_secret:
             raise ValueError(

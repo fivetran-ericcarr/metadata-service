@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pip + venv retained as a documented fallback (same `pyproject.toml`). Tests pass
   on the locked Python 3.11 environment.
 
+### Added
+- **Warehouse metadata reader** (`warehouse/`) — reads authoritative primary keys
+  from the Fivetran Platform Connector's `fivetran_metadata` schema in a Snowflake
+  destination and overrides PK flags during `build` (incl. composite keys), tagging
+  columns `key_source: "fivetran_platform"`. Optional extra
+  `warehouse-snowflake`; config via `WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`; toggle
+  with `build --warehouse-metadata/--no-warehouse-metadata`. Verified live: recovered
+  75 PKs (GitHub exposed 0 via the config API) and drove 27 composite-key recs.
+
 ### Changed
 - `build --aliases-file <json>` activates the `configured_alias` match tier from a
   `{"<dest_schema>.<dest_table>": "<dbt_schema>.<dbt_table>"}` map (see

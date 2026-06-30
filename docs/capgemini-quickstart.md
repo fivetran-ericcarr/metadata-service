@@ -169,10 +169,11 @@ source freshness. The full walkthrough is in
   the recommendations).
 - **Deterministic matching** (no fuzzy joins) — see `match_confidence`. Use the
   `aliases` map for known exceptions.
-- **Primary keys** come from Fivetran where exposed; some connectors (e.g. GitHub)
-  don't expose them via the config API, and Fivetran's standalone Metadata API is
-  deprecated (PK/lineage now live in the Platform Connector's `fivetran_metadata`
-  schema). The dbt test layer is where coverage is asserted.
+- **Primary keys** come from Fivetran where the config API exposes them. Some
+  connectors (e.g. GitHub) don't — so for authoritative PKs (incl. composite keys)
+  enable the optional Snowflake **warehouse reader** (`WAREHOUSE_TYPE=snowflake` +
+  `WAREHOUSE_*`), which reads the Platform Connector's `fivetran_metadata` schema.
+  The standalone Metadata REST API is deprecated.
 - **dbt metadata** is read from **run artifacts** (manifest/catalog/run_results/
   sources), so a deployment job must have run.
 

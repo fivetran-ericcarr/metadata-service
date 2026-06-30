@@ -92,6 +92,11 @@ def build(
         help="JSON map of '<dest_schema>.<dest_table>': '<dbt_schema>.<dbt_table>' "
              "for the configured_alias match tier.",
     ),
+    warehouse_metadata: bool = typer.Option(
+        True, "--warehouse-metadata/--no-warehouse-metadata",
+        help="Enrich PKs from the Fivetran Platform Connector's fivetran_metadata "
+             "schema when WAREHOUSE_* is configured.",
+    ),
     write_latest: bool = typer.Option(True, "--write-latest/--no-write-latest"),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
@@ -108,6 +113,7 @@ def build(
         dbt_project_id=dbt_project_id,
         dbt_job_id=dbt_job_id,
         aliases=aliases,
+        enrich_warehouse=warehouse_metadata,
     )
     summary = {k: v for k, v in result.items() if k != "doc"}
     summary["drift_count"] = len(result["doc"].get("schema_drift", []))

@@ -296,11 +296,14 @@ that Protocol and wiring it into `get_storage`.
   `configured_alias` tier, or extend `_match` for warehouse-aware matching.
 - **Recommendations**: add rules in `dq/recommendations.py` (PII, natural keys,
   boolean accepted-values, untested objects, etc. ship today).
+- **Authoritative PKs**: read the Fivetran Platform Connector's `fivetran_metadata`
+  schema from a Snowflake destination — set `WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`
+  and install `pip install 'metadata-service[warehouse-snowflake]'`. The build then
+  overrides PK flags (incl. composite keys) from `SOURCE_COLUMN`/lineage; columns are
+  tagged `key_source: "fivetran_platform"`. Extend `warehouse/` for BigQuery/Databricks.
 - **Storage**: implement `MetadataStorage` (e.g., GCS, Azure Blob).
 - **Drift**: add change types + severities in `dq/drift.py`.
 - **dbt Discovery API**: use `DbtClient.query_discovery` for richer lineage.
-- **Authoritative PKs / lineage**: read the Fivetran Platform Connector's
-  `fivetran_metadata` schema from the destination warehouse (planned).
 
 ## How Capgemini Plugs This In
 

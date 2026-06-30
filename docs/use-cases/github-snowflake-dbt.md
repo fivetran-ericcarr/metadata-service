@@ -183,6 +183,23 @@ Typical flow: `get_dq_summary()` → `list_warehouse_objects(missing_coverage=tr
 `get_dq_recommendations()` to act. Served over stdio (local) or HTTP (hosted) —
 see the [MCP Usage](../../README.md#7-mcp-usage) section.
 
+## Authoritative primary keys (Platform Connector)
+
+GitHub's config API exposes **no** primary keys (0 across 585 columns). Enabling the
+optional Snowflake warehouse reader (`WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`) adds
+a Fivetran **Platform Connector** to the destination and reads PKs from its
+`fivetran_metadata` schema. Re-running the build:
+
+```text
+Enriched 75 primary-key columns from fivetran_metadata
+```
+
+`github.issue` → PK `id`; composite keys now surface (`branch_commit_relation` =
+`branch_name`+`commit_sha`, `commit_file` = `filename`+`commit_sha`), which drove **27
+`dbt_utils.unique_combination_of_columns`** recommendations. Enriched columns are
+tagged `key_source: "fivetran_platform"`. This is the modern, authoritative PK/lineage
+source (the standalone Metadata REST API is deprecated).
+
 ## Lessons learned (real findings from this build)
 
 1. **Fivetran's config API does not expose `is_primary_key` for the GitHub

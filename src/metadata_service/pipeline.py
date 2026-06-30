@@ -32,6 +32,7 @@ def build_metadata(
     skip_paused: bool = False,
     dbt_project_id: int | None = None,
     dbt_job_id: int | None = None,
+    enrich_warehouse: bool = True,
 ) -> dict:
     """Run extraction + normalization and return the normalized document."""
     if fixtures_dir:
@@ -49,6 +50,8 @@ def build_metadata(
         )
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
+    if enrich_warehouse and not fixtures_dir and include_fivetran:
+        _enrich_primary_keys(settings, fivetran_norm)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
     doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm)
     logger.info(
@@ -72,6 +75,7 @@ def build_and_store(
     skip_paused: bool = False,
     dbt_project_id: int | None = None,
     dbt_job_id: int | None = None,
+    enrich_warehouse: bool = True,
 ) -> dict:
     """Build metadata, attach drift vs. the previous snapshot, persist, and return
     a summary ``{status, snapshot_uri, generated_at, object_count, error_count, doc}``.
@@ -92,6 +96,7 @@ def build_and_store(
         skip_paused=skip_paused,
         dbt_project_id=dbt_project_id,
         dbt_job_id=dbt_job_id,
+        enrich_warehouse=enrich_warehouse,
     )
     doc["schema_drift"] = detect_drift(previous, doc)
     uri = storage.write_snapshot(doc)
@@ -120,6 +125,27 @@ def _extract_fivetran(
             connected_only=connected_only,
             skip_paused=skip_paused,
         )
+
+
+def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> None:
+    """Override PK flags from the Platform Connector's fivetran_metadata (best-effort)."""
+    from .warehouse import apply_primary_keys, get_warehouse_reader
+
+    reader = get_warehouse_reader(settings)
+    if reader is None:
+        return
+    connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", []) if c.get("connection_id")]
+    try:
+        pk_map = reader.read_primary_keys(connection_ids or None)
+        updated = apply_primary_keys(fivetran_norm, pk_map)
+        logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
+    except Exception as exc:  # never fail the build on enrichment
+        logger.warning("Warehouse PK enrichment skipped: %s", exc)
+    finally:
+        try:
+            reader.close()
+        except Exception:  # pragma: no cover
+            pass
 
 
 def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: int | None = None) -> dict:

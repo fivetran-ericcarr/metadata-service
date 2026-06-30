@@ -242,6 +242,7 @@ downstream models.
 | `dbt.freshness` | Freshness result/config for the matched source (or `null`) |
 | `columns[].is_primary_key` | True only for an unambiguous Fivetran primary key (see below) |
 | `columns[].key_constraint` | `primary_key`, `primary_or_foreign_key`, or `null` |
+| `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, else `null` |
 | `columns[].dbt_tests` | dbt test types already present on that column |
 | `columns[].recommended_tests` | Test names recommended for that column (see 2.4) |
 | `match_confidence` | `exact_relation`, `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched` |
@@ -259,6 +260,13 @@ exclusion via `enabled_patch_settings` (`allowed: false`, `reason_code:
   at `medium` confidence, but not `unique` (it may be a foreign key).
 
 An explicit `is_primary_key` field, when a connector provides one, always wins.
+
+**Authoritative PKs (optional).** When the Snowflake warehouse reader is configured
+(`WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`), the build overrides PK flags from the
+Fivetran Platform Connector's `fivetran_metadata` schema (`SOURCE_COLUMN.is_primary_key`
+joined through `COLUMN_LINEAGE` to the destination column). This recovers PKs the
+config API omits (e.g. GitHub) and reveals **composite** keys. Such columns are tagged
+`key_source: "fivetran_platform"`; `key_source` is `null` otherwise.
 
 ### 2.4 `dq_recommendations[]`
 
