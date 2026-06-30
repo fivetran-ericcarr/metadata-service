@@ -40,6 +40,8 @@ class DbtNormalizer:
         exposures = self._build_exposures(manifest_exposures)
         metrics, semantic_models = self._build_metrics(
             manifest.get("metrics") or {}, manifest.get("semantic_models") or {})
+        from ..dq.column_lineage import build_column_lineage
+        column_lineage_edges = build_column_lineage(manifest, catalog)
 
         return {
             "extracted_at": raw.get("extracted_at"),
@@ -54,6 +56,7 @@ class DbtNormalizer:
             "metrics": metrics,
             "semantic_models": semantic_models,
             "lineage_edges": lineage_edges,
+            "column_lineage_edges": column_lineage_edges,
             "errors": warnings,
         }
 

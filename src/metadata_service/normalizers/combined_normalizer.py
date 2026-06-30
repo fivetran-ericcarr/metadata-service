@@ -88,6 +88,7 @@ class CombinedNormalizer:
                     "metrics": metrics,
                     "semantic_models": semantic_models,
                     "lineage_edges": dbt_normalized.get("lineage_edges") or [],
+                    "column_lineage_edges": dbt_normalized.get("column_lineage_edges") or [],
                 },
             },
             "warehouse_objects": warehouse_objects,

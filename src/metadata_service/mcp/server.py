@@ -73,6 +73,12 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
         return tools.get_impact(schema, table)
 
     @server.tool()
+    def get_column_impact(schema: str, table: str, column: str) -> dict:
+        """Column-level blast radius: downstream model columns a Fivetran column
+        feeds (via parsed SQL lineage), plus affected metrics and exposures."""
+        return tools.get_column_impact(schema, table, column)
+
+    @server.tool()
     def list_metrics() -> dict:
         """Semantic Layer metrics with a trust level (trusted|watch|at_risk) from
         the DQ posture of their upstream objects."""

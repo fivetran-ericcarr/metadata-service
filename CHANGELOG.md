@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- **Column-level lineage** (sqlglot): parses compiled model SQL into column→column
+  edges (resolving `SELECT *` via the catalog schema and tables via each leaf's
+  source expression), exposed as `dbt.column_lineage_edges` plus a
+  `get_column_impact(schema, table, column)` MCP tool that returns the downstream
+  columns, metrics, and exposures a Fivetran column feeds. Optional `lineage` extra.
+  Verified live: `github.repository.id` → mart → 3 metrics + dashboard exposure.
 - **dbt Semantic Layer metric trust**: extract metrics + semantic models (resolving
   each metric to its upstream models, incl. ratio metrics via constituent metrics);
   attach `dbt.metrics` to warehouse objects; a top-level `metric_quality` rollup with a

@@ -180,6 +180,40 @@ def get_impact(schema: str, table: str, settings: Settings | None = None) -> dic
     }
 
 
+def get_column_impact(schema: str, table: str, column: str, settings: Settings | None = None) -> dict:
+    """Column-level blast radius: starting from a Fivetran destination column, the
+    downstream model columns it feeds (via parsed SQL lineage), plus the metrics and
+    exposures of the affected models. 'If this column changes, what breaks?'"""
+    settings = settings or get_settings()
+    from ..dq.column_lineage import downstream_columns
+
+    doc = _latest(settings)
+    obj = get_warehouse_object(schema, table, settings=settings)
+    if not obj.get("name"):
+        return obj
+    source_uid = (obj.get("dbt") or {}).get("source_unique_id")
+    if not source_uid:
+        return {"found": False, "message": f"{schema}.{table} is not matched to a dbt source."}
+
+    edges = doc.get("sources", {}).get("dbt", {}).get("column_lineage_edges", [])
+    affected = downstream_columns(edges, source_uid, column)
+    affected_models = sorted({a["unique_id"] for a in affected})
+
+    # metrics/exposures fed by the affected models
+    metrics = [m for m in doc.get("sources", {}).get("dbt", {}).get("metrics", [])
+               if set(m.get("model_unique_ids") or []) & set(affected_models)]
+    exposures = [e for e in doc.get("sources", {}).get("dbt", {}).get("exposures", [])
+                 if set(e.get("depends_on") or []) & set(affected_models)]
+    return {
+        "object_id": obj.get("object_id"),
+        "column": column,
+        "affected_columns": affected,
+        "affected_model_count": len(affected_models),
+        "metrics": [{"name": m.get("name"), "type": m.get("type")} for m in metrics],
+        "exposures": [{"name": e.get("name"), "type": e.get("type")} for e in exposures],
+    }
+
+
 def list_metrics(settings: Settings | None = None) -> dict:
     """Semantic Layer metrics with a trust level derived from the DQ posture of
     their upstream objects (trusted | watch | at_risk | unknown)."""
