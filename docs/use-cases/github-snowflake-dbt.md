@@ -10,7 +10,7 @@ produces actionable Data Quality output.
 |---|---|
 | **Source** | GitHub repo [`fivetran/dbt_github`](https://github.com/fivetran/dbt_github) |
 | **Replication** | Fivetran GitHub connector → Snowflake (`ERICC_TEST_DB.github`) |
-| **Transformation** | dbt project [`github-dq-dbt`](https://github.com/fivetran-ericcarr/github-dq-dbt): 7 staging models + DQ tests + source freshness |
+| **Transformation** | dbt project [`github-dq-dbt`](https://github.com/fivetran-ericcarr/github-dq-dbt): 7 staging models + 1 mart + DQ tests + source freshness |
 | **Metadata join** | `metadata-service build` → 76 warehouse objects, 7 joined to dbt, 223 DQ recommendations, 0 errors |
 
 ```text
@@ -138,6 +138,25 @@ Heuristic recommendations generated for this object (column names drive them):
    "reason": "Column ends with '_id' and may reference another table.", "confidence": "heuristic"}
 ]
 ```
+
+### Multi-hop lineage: downstream mart
+
+A mart, `github__repository_issue_summary` (one row per repo, aggregating issues
+and pull requests from three staging models), gives the join real model→model
+lineage. The metadata-service traverses **source → staging → mart**, so each
+matched object lists two downstream models:
+
+```text
+source.github_dq.github.issue
+  → model.github_dq.stg_github__issue            (source → model)
+  → model.github_dq.github__repository_issue_summary   (model → model)
+```
+
+Rebuilding after the mart landed produced **18 `dbt_test_added` drift records**
+(severity `low`) on `issue`, `pull_request`, and `repository` — the mart's tests
+now appear in those objects' downstream coverage. (Note: a downstream mart's
+tests are attributed to every upstream source object via lineage, so this is a
+"downstream coverage" view, not strictly tests defined on that table.)
 
 ## Lessons learned (real findings from this build)
 
