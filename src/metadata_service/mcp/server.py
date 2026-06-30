@@ -3,6 +3,9 @@
 Binds the SDK-independent functions in ``tools.py`` to the official Python MCP
 SDK. If the ``mcp`` package is not installed, ``run_server`` raises a clear
 error with installation instructions instead of failing obscurely.
+
+Supports both stdio (local subprocess) and HTTP (streamable-http, for hosted /
+remote agents) transports.
 """
 
 from __future__ import annotations
@@ -20,41 +23,64 @@ _INSTALL_HINT = (
 )
 
 
-def build_server():
+def build_server(host: str = "0.0.0.0", port: int = 8765):
     """Construct and return a configured FastMCP server instance.
 
     Raises ImportError (with install instructions) if the SDK is unavailable.
+    ``host``/``port`` only apply to HTTP transports.
     """
     try:
         from mcp.server.fastmcp import FastMCP  # type: ignore
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(_INSTALL_HINT) from exc
 
-    server = FastMCP("fivetran-dbt-metadata")
+    server = FastMCP("fivetran-dbt-metadata", host=host, port=port)
+
+    # --- Orientation / discovery (compact, agent-friendly) ----------------
+    @server.tool()
+    def get_dq_summary() -> dict:
+        """Account-level DQ rollup: object counts by risk, missing coverage,
+        failing tests, stale syncs, recommendations by type/confidence, and drift.
+        The first call an agent makes to orient itself."""
+        return tools.get_dq_summary()
 
     @server.tool()
-    def refresh_metadata(
-        fivetran_group_id: str | None = None,
-        include_fivetran: bool = True,
-        include_dbt: bool = True,
+    def list_warehouse_objects(
+        schema: str | None = None,
+        risk_level: str | None = None,
+        missing_coverage: bool | None = None,
+        failing_tests: bool | None = None,
+        stale: bool | None = None,
+        limit: int | None = None,
     ) -> dict:
-        """Run extraction + normalization and write a new latest snapshot."""
-        return tools.refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)
+        """Compact, filterable index of warehouse objects for triage (small rows,
+        no columns/tests). Filter by schema, risk_level (low|medium|high),
+        missing_coverage, failing_tests, stale. Use get_warehouse_object for detail."""
+        return tools.list_warehouse_objects(
+            schema, risk_level, missing_coverage, failing_tests, stale, limit
+        )
 
-    @server.tool()
-    def get_latest_metadata(scope: str = "all") -> dict:
-        """Return the latest normalized metadata. scope: all|fivetran|dbt|warehouse_objects."""
-        return tools.get_latest_metadata(scope)
-
+    # --- Detail -----------------------------------------------------------
     @server.tool()
     def get_warehouse_object(schema: str, table: str) -> dict:
-        """Return a single warehouse object by schema + table, or a not-found message."""
+        """Return a single warehouse object (full detail) by schema + table."""
         return tools.get_warehouse_object(schema, table)
 
     @server.tool()
-    def get_dq_recommendations(schema: str, table: str) -> dict:
-        """Return DQ recommendations for a single warehouse object."""
-        return tools.get_dq_recommendations(schema, table)
+    def get_dq_recommendations(
+        schema: str | None = None,
+        table: str | None = None,
+        recommendation_type: str | None = None,
+        confidence: str | None = None,
+        risk: str | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """DQ recommendations, filterable per-object (schema/table) or across the
+        whole snapshot by recommendation_type (dbt_test|risk|signal),
+        confidence (high|medium|heuristic), or risk."""
+        return tools.get_dq_recommendations(
+            schema, table, recommendation_type, confidence, risk, limit
+        )
 
     @server.tool()
     def get_schema_drift(
@@ -65,14 +91,42 @@ def build_server():
         """Return schema drift records, optionally filtered by object and severity."""
         return tools.get_schema_drift(schema, table, severity)
 
+    # --- Raw / bulk (use sparingly; large payloads) -----------------------
+    @server.tool()
+    def get_latest_metadata(scope: str = "all") -> dict:
+        """Return the full normalized snapshot. scope: all|fivetran|dbt|
+        warehouse_objects. Large — prefer get_dq_summary / list_warehouse_objects."""
+        return tools.get_latest_metadata(scope)
+
+    # --- Action -----------------------------------------------------------
+    @server.tool()
+    def refresh_metadata(
+        fivetran_group_id: str | None = None,
+        include_fivetran: bool = True,
+        include_dbt: bool = True,
+    ) -> dict:
+        """Run extraction + normalization and write a new latest snapshot."""
+        return tools.refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)
+
     return server
 
 
-def run_server() -> None:
-    """Build and run the MCP server over stdio."""
+def run_server(transport: str = "stdio", host: str = "0.0.0.0", port: int = 8765) -> None:
+    """Build and run the MCP server.
+
+    transport: ``stdio`` (local subprocess) | ``http``/``streamable-http`` |
+    ``sse`` (HTTP transports use host/port).
+    """
     try:
-        server = build_server()
+        server = build_server(host=host, port=port)
     except ImportError as exc:
         logger.error(str(exc))
         raise
-    server.run()
+
+    normalized = {"http": "streamable-http", "streamable-http": "streamable-http",
+                  "sse": "sse", "stdio": "stdio"}.get(transport, "stdio")
+    if normalized == "stdio":
+        logger.info("Starting MCP server over stdio")
+    else:
+        logger.info("Starting MCP server over %s on %s:%s", normalized, host, port)
+    server.run(transport=normalized)

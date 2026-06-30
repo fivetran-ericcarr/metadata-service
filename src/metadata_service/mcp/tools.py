@@ -62,16 +62,155 @@ def get_warehouse_object(schema: str, table: str, settings: Settings | None = No
     return {"found": False, "message": f"No warehouse object for schema={schema!r} table={table!r}."}
 
 
-def get_dq_recommendations(schema: str, table: str, settings: Settings | None = None) -> dict:
+def get_dq_recommendations(
+    schema: str | None = None,
+    table: str | None = None,
+    recommendation_type: str | None = None,
+    confidence: str | None = None,
+    risk: str | None = None,
+    limit: int | None = None,
+    settings: Settings | None = None,
+) -> dict:
+    """DQ recommendations, filterable per-object or across the whole snapshot.
+
+    Filters (all optional, AND-combined): ``schema``/``table`` (target object),
+    ``recommendation_type`` (dbt_test|risk|signal), ``confidence``
+    (high|medium|heuristic), ``risk`` (e.g. missing_dbt_coverage). ``limit`` caps
+    the returned list.
+    """
     settings = settings or get_settings()
     doc = _latest(settings)
-    recs = [
-        r
+    recs = doc.get("dq_recommendations", [])
+    if schema:
+        recs = [r for r in recs if (r.get("target", {}).get("schema") or "").lower() == schema.lower()]
+    if table:
+        recs = [r for r in recs if (r.get("target", {}).get("table") or "").lower() == table.lower()]
+    if recommendation_type:
+        recs = [r for r in recs if r.get("recommendation_type") == recommendation_type]
+    if confidence:
+        recs = [r for r in recs if r.get("confidence") == confidence]
+    if risk:
+        recs = [r for r in recs if r.get("risk") == risk]
+    total = len(recs)
+    if limit is not None:
+        recs = recs[:limit]
+    return {"count": total, "returned": len(recs), "recommendations": recs}
+
+
+def _stale_object_ids(doc: dict) -> set[str]:
+    return {
+        r.get("object_id")
         for r in doc.get("dq_recommendations", [])
-        if (r.get("target", {}).get("schema") or "").lower() == schema.lower()
-        and (r.get("target", {}).get("table") or "").lower() == table.lower()
-    ]
-    return {"count": len(recs), "recommendations": recs}
+        if r.get("risk") == "stale_fivetran_sync"
+    }
+
+
+def list_warehouse_objects(
+    schema: str | None = None,
+    risk_level: str | None = None,
+    missing_coverage: bool | None = None,
+    failing_tests: bool | None = None,
+    stale: bool | None = None,
+    limit: int | None = None,
+    settings: Settings | None = None,
+) -> dict:
+    """Compact, filterable index of warehouse objects for agent triage.
+
+    Returns small rows (no columns/tests payload). Filters (AND-combined):
+    ``schema``, ``risk_level`` (low|medium|high), ``missing_coverage`` (unmatched
+    to dbt), ``failing_tests`` (>0 failing), ``stale`` (Fivetran sync past
+    threshold). Use ``get_warehouse_object`` for the full detail of one object.
+    """
+    settings = settings or get_settings()
+    doc = _latest(settings)
+    stale_ids = _stale_object_ids(doc)
+    rows: list[dict] = []
+    for o in doc.get("warehouse_objects", []):
+        summary = o.get("dq_summary", {})
+        dbt = o.get("dbt", {})
+        has_coverage = bool(dbt.get("source_unique_id") or dbt.get("model_unique_ids"))
+        is_failing = (summary.get("failing_tests_count") or 0) > 0
+        is_missing = o.get("match_confidence") == "unmatched"
+        is_stale = o.get("object_id") in stale_ids
+
+        if schema and (o.get("schema") or "").lower() != schema.lower():
+            continue
+        if risk_level and summary.get("risk_level") != risk_level:
+            continue
+        if missing_coverage is not None and is_missing != missing_coverage:
+            continue
+        if failing_tests is not None and is_failing != failing_tests:
+            continue
+        if stale is not None and is_stale != stale:
+            continue
+
+        rows.append({
+            "object_id": o.get("object_id"),
+            "schema": o.get("schema"),
+            "name": o.get("name"),
+            "match_confidence": o.get("match_confidence"),
+            "risk_level": summary.get("risk_level"),
+            "has_dbt_coverage": has_coverage,
+            "has_freshness_check": summary.get("has_freshness_check", False),
+            "failing_tests_count": summary.get("failing_tests_count", 0),
+            "recommended_tests_count": summary.get("recommended_tests_count", 0),
+            "is_stale": is_stale,
+        })
+    total = len(rows)
+    if limit is not None:
+        rows = rows[:limit]
+    return {"count": total, "returned": len(rows), "objects": rows}
+
+
+def get_dq_summary(settings: Settings | None = None) -> dict:
+    """Account-level DQ rollup — the orienting call an agent makes first."""
+    settings = settings or get_settings()
+    doc = _latest(settings)
+    objs = doc.get("warehouse_objects", [])
+    recs = doc.get("dq_recommendations", [])
+    drift = doc.get("schema_drift", [])
+    stale_ids = _stale_object_ids(doc)
+
+    risk_levels = {"low": 0, "medium": 0, "high": 0}
+    matched = failing = missing = with_freshness = 0
+    for o in objs:
+        s = o.get("dq_summary", {})
+        risk_levels[s.get("risk_level", "low")] = risk_levels.get(s.get("risk_level", "low"), 0) + 1
+        if o.get("match_confidence") != "unmatched":
+            matched += 1
+        else:
+            missing += 1
+        if (s.get("failing_tests_count") or 0) > 0:
+            failing += 1
+        if s.get("has_freshness_check"):
+            with_freshness += 1
+
+    def tally(items, key):
+        out: dict = {}
+        for it in items:
+            v = it.get(key)
+            if v is not None:
+                out[v] = out.get(v, 0) + 1
+        return out
+
+    return {
+        "generated_at": doc.get("generated_at"),
+        "object_count": len(objs),
+        "matched": matched,
+        "unmatched": len(objs) - matched,
+        "risk_levels": risk_levels,
+        "objects_with_failing_tests": failing,
+        "objects_missing_dbt_coverage": missing,
+        "objects_stale": len(stale_ids),
+        "objects_with_freshness": with_freshness,
+        "recommendations": {
+            "total": len(recs),
+            "by_type": tally(recs, "recommendation_type"),
+            "by_confidence": tally(recs, "confidence"),
+            "by_risk": tally(recs, "risk"),
+        },
+        "drift": {"total": len(drift), "by_severity": tally(drift, "severity")},
+    }
 
 
 def get_schema_drift(

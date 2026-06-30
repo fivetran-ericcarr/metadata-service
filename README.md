@@ -160,16 +160,35 @@ Response:
 
 ## 7. MCP Usage
 
-The MCP server exposes narrow, task-focused tools:
-`refresh_metadata`, `get_latest_metadata`, `get_warehouse_object`,
-`get_dq_recommendations`, `get_schema_drift`.
+The MCP server is the drop-in hook for an agentic Data Quality application: a
+narrow, token-efficient tool surface over the normalized metadata.
 
 ```bash
 pip install -e ".[mcp]"
-metadata-service serve-mcp
+metadata-service serve-mcp                          # stdio (local subprocess agents)
+metadata-service serve-mcp --transport http --port 8765   # hosted / remote agents
 ```
 
-Example Claude Desktop config entry:
+### Tools (designed for agent triage → drill-down)
+
+| Tool | Use | Typical size |
+|---|---|---|
+| `get_dq_summary()` | **Start here.** Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
+| `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). | ~0.3 KB/row |
+| `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, dq_summary). | ~few KB |
+| `get_dq_recommendations(schema, table, recommendation_type, confidence, risk, limit)` | Per-object **or** cross-snapshot recommendation filtering. | scales with filter |
+| `get_schema_drift(schema, table, severity)` | Drift records since the previous snapshot. | scales with filter |
+| `get_latest_metadata(scope)` | Full snapshot (large — prefer the tools above). | up to ~400 KB |
+| `refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)` | Trigger a new extraction + snapshot. | small |
+
+Recommended agent flow: `get_dq_summary()` to orient → `list_warehouse_objects(...)`
+to find the objects that matter (e.g. `missing_coverage=true` or `failing_tests=true`)
+→ `get_warehouse_object()` / `get_dq_recommendations()` to act. This keeps payloads
+small instead of pulling the whole 400 KB snapshot.
+
+### Connecting
+
+**Local (stdio)** — e.g. Claude Desktop / a local agent runtime:
 
 ```json
 {
@@ -177,11 +196,21 @@ Example Claude Desktop config entry:
     "fivetran-dbt-metadata": {
       "command": "metadata-service",
       "args": ["serve-mcp"],
-      "env": { "FIVETRAN_API_KEY": "...", "DBT_SERVICE_TOKEN": "..." }
+      "env": { "FIVETRAN_API_KEY": "...", "FIVETRAN_API_SECRET": "...",
+               "DBT_ACCOUNT_ID": "...", "DBT_SERVICE_TOKEN": "..." }
     }
   }
 }
 ```
+
+**Hosted (HTTP)** — for a remote agent in a DQaaS platform:
+
+```bash
+metadata-service serve-mcp --transport http --host 0.0.0.0 --port 8765
+# agent connects to the streamable-http endpoint at http://<host>:8765/mcp
+```
+
+Transport and bind can also be set via `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT`.
 
 The tool logic lives in `mcp/tools.py` as plain functions (SDK-independent and
 unit-tested). `mcp/server.py` binds them to the official MCP SDK; if the SDK is

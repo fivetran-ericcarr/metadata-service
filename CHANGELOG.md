@@ -13,38 +13,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/use-cases/github-snowflake-dbt.md` — a live end-to-end reference build
   (GitHub → Fivetran → Snowflake → dbt → metadata-service) with real results.
 - `.gitignore` now excludes private keys (`*.pem`, `*.p8`, `*.key`, `rsa_key*`).
-- Fivetran connection filters `--connected-only` (skip broken/incomplete setups)
-  and `--skip-paused` (skip paused connections), exposed on both
-  `fivetran extract` and `build` and threaded through the extractor and pipeline.
-  Note: `--connected-only` filters on `setup_state`, so paused-but-connected
-  connectors are excluded only by `--skip-paused`.
-- Column `key_constraint` field (`primary_key` | `primary_or_foreign_key` | `null`)
-  on normalized Fivetran columns and warehouse-object columns.
-- dbt extraction scoping: `--project-id` and `--job-id` on `dbt extract`, and
-  `--dbt-project-id` / `--dbt-job-id` on `build` (threaded through the pipeline and
-  extractor). Essential for large/shared dbt accounts where an unscoped run would
-  grab artifacts from an unrelated project.
-- dbt Admin API pagination (limit/offset) for `list_projects`, `list_environments`,
-  and `list_jobs`, which previously truncated silently at 100.
-
-### Fixed
-- **dbt artifact download returned 406.** The run-artifact endpoint rejects
-  `Accept: application/json`; `get_run_artifact` now sends `Accept: */*` for that
-  request only. Without this, every dbt artifact (manifest/catalog/run_results)
-  failed to download. Verified live against real dbt Cloud runs.
-- **Primary key detection.** Fivetran's config API does not return `is_primary_key`;
-  key columns are locked via `enabled_patch_settings` (`reason_code: SYSTEM_COLUMN`
-  with a primary-key reason). The normalizer now derives PKs from this, so
-  `not_null`/`unique` recommendations fire again. Confident PKs (reason names only a
-  primary key, e.g. Postgres `ctid`) set `is_primary_key: true`; SaaS/SDK connectors
-  that lump "primary key or a foreign key" set `key_constraint: primary_or_foreign_key`
-  and get a `not_null` (medium) recommendation only. Verified live: 18 confident PKs,
-  52 ambiguous keys across the test account.
+- MCP agent-triage tools: `get_dq_summary` (account rollup) and
+  `list_warehouse_objects` (compact, filterable index). `get_dq_recommendations`
+  gained cross-snapshot filtering (`recommendation_type`/`confidence`/`risk`/`limit`)
+  and per-object args are now optional. Lets agents orient and triage without
+  pulling the full ~400 KB snapshot.
+- MCP HTTP transport: `serve-mcp --transport http|sse --host --port` (plus
+  `MCP_TRANSPORT`/`MCP_HOST`/`MCP_PORT`) for hosted/remote agents, alongside stdio.
 
 ### Changed
-- Pinned `starlette>=0.46,<1.0` to silence the Starlette `TestClient` deprecation
-  warning that recommends `httpx2`. FastAPI only requires `starlette>=0.46`, so the
-  pin is well within its supported range.
+- Fivetran connection filters `--connected-only` / `--skip-paused` on `fivetran
+  extract` and `build` (`--connected-only` filters on `setup_state`; paused-but-
+  connected connectors are excluded only by `--skip-paused`).
+- Added `key_constraint` (`primary_key` | `primary_or_foreign_key` | `null`) to
+  normalized Fivetran columns and warehouse-object columns.
+- dbt extraction scoping (`--project-id`/`--job-id`, `--dbt-project-id`/`--dbt-job-id`)
+  and Admin API pagination for `list_projects`/`list_environments`/`list_jobs`
+  (previously truncated at 100).
+- Pinned `starlette>=0.46,<1.0` to silence the Starlette `TestClient` httpx2
+  deprecation warning (FastAPI only requires `starlette>=0.46`).
+
+### Fixed
+- `Settings(field_name=...)` was silently ignored for alias'd fields (`extra=ignore`),
+  so programmatic overrides (e.g. a test's `metadata_local_path`) became no-ops.
+  Enabled `populate_by_name=True`.
+- **dbt artifact download returned 406** — the run-artifact endpoint rejects
+  `Accept: application/json`; `get_run_artifact` now sends `Accept: */*`. Verified live.
+- **Primary key detection** — Fivetran's config API omits `is_primary_key`; the
+  normalizer derives keys from `enabled_patch_settings` (`SYSTEM_COLUMN` + a
+  primary-key reason). Confident PKs set `is_primary_key`; ambiguous PK/FK set
+  `key_constraint: primary_or_foreign_key`. Verified live (18 PKs, 52 ambiguous).
 
 ## [1.0.0] - 2026-06-25
 

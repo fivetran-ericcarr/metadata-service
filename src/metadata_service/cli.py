@@ -151,11 +151,24 @@ def serve_api() -> None:
 
 
 @app.command("serve-mcp")
-def serve_mcp() -> None:
-    """Start the MCP server (requires the optional mcp extra)."""
+def serve_mcp(
+    transport: str = typer.Option("stdio", "--transport", help="stdio | http | sse"),
+    host: str | None = typer.Option(None, "--host", help="Bind host for HTTP transports."),
+    port: int | None = typer.Option(None, "--port", help="Bind port for HTTP transports."),
+) -> None:
+    """Start the MCP server (requires the optional mcp extra).
+
+    stdio for local subprocess agents; http (streamable-http) or sse for hosted
+    / remote agents.
+    """
     from .mcp.server import run_server
 
-    run_server()
+    settings = get_settings()
+    run_server(
+        transport=transport or settings.mcp_transport,
+        host=host or settings.mcp_host,
+        port=port or settings.mcp_port,
+    )
 
 
 if __name__ == "__main__":

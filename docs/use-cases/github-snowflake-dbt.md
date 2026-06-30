@@ -158,6 +158,31 @@ now appear in those objects' downstream coverage. (Note: a downstream mart's
 tests are attributed to every upstream source object via lineage, so this is a
 "downstream coverage" view, not strictly tests defined on that table.)
 
+## Agent hook (MCP)
+
+An agentic DQ application consumes this through the MCP server. The full snapshot
+is ~407 KB, so agents triage via compact tools instead of pulling everything.
+`get_dq_summary()` over this exact build returns ~0.5 KB:
+
+```json
+{
+  "object_count": 76, "matched": 7, "unmatched": 69,
+  "risk_levels": {"low": 3, "medium": 73, "high": 0},
+  "objects_with_failing_tests": 0,
+  "objects_missing_dbt_coverage": 69,
+  "objects_with_freshness": 7,
+  "recommendations": {"total": 223, "by_type": {"dbt_test": 157, "risk": 66},
+                       "by_confidence": {"heuristic": 157},
+                       "by_risk": {"missing_dbt_coverage": 66}},
+  "drift": {"total": 18, "by_severity": {"low": 18}}
+}
+```
+
+Typical flow: `get_dq_summary()` → `list_warehouse_objects(missing_coverage=true)`
+(20 KB for 69 rows vs 194 KB full) → `get_warehouse_object()` /
+`get_dq_recommendations()` to act. Served over stdio (local) or HTTP (hosted) —
+see the [MCP Usage](../../README.md#7-mcp-usage) section.
+
 ## Lessons learned (real findings from this build)
 
 1. **Fivetran's config API does not expose `is_primary_key` for the GitHub

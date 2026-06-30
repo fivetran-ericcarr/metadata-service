@@ -20,6 +20,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Allow constructing Settings(field_name=...) in addition to env aliases.
+        # Without this, alias'd fields silently ignore field-name kwargs (extra=ignore),
+        # which made programmatic overrides (e.g. in tests) no-ops.
+        populate_by_name=True,
     )
 
     # --- Fivetran ---------------------------------------------------------
@@ -48,6 +52,11 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8080, alias="API_PORT")
+
+    # --- MCP server -------------------------------------------------------
+    mcp_transport: str = Field(default="stdio", alias="MCP_TRANSPORT")
+    mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
+    mcp_port: int = Field(default=8765, alias="MCP_PORT")
 
     # --- Data Quality -----------------------------------------------------
     warehouse_type: str = Field(default="warehouse", alias="WAREHOUSE_TYPE")
