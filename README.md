@@ -5,6 +5,10 @@ A Python service that extracts, normalizes, stores, and serves metadata from
 application. It replaces a manually uploaded JSON metadata file with an automated
 metadata pipeline plus optional REST and MCP interfaces.
 
+> **New here?** Start with the **[Capgemini DQaaS Quickstart & Solution Guide](docs/capgemini-quickstart.md)**
+> — what it does, how agents use it, and where it fits — then the runnable
+> **[examples/](examples/)** (agent client, REST, offline demo).
+>
 > **Live reference build:** [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
 > walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
 > (76 warehouse objects, 7 joined to dbt, 223 DQ recommendations).

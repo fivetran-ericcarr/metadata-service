@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulling the full ~400 KB snapshot.
 - MCP HTTP transport: `serve-mcp --transport http|sse --host --port` (plus
   `MCP_TRANSPORT`/`MCP_HOST`/`MCP_PORT`) for hosted/remote agents, alongside stdio.
+- `docs/capgemini-quickstart.md` — solution guide (what it does, agent triage flow,
+  where it fits in DQaaS, 5-minute quickstart) with architecture + sequence diagrams
+  and `docs/assets/architecture.svg`.
+- `examples/` — runnable `agent_quickstart.py` (MCP triage flow, stdio + http),
+  `rest_quickstart.sh`, and a self-contained offline `demo.sh`.
 
 ### Changed
 - Fivetran connection filters `--connected-only` / `--skip-paused` on `fivetran
