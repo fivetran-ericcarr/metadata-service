@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- **dbt Semantic Layer metric trust**: extract metrics + semantic models (resolving
+  each metric to its upstream models, incl. ratio metrics via constituent metrics);
+  attach `dbt.metrics` to warehouse objects; a top-level `metric_quality` rollup with a
+  per-metric `trust_level` (trusted|watch|at_risk) from upstream DQ posture; a
+  `metric_at_risk` risk; and `list_metrics` / `get_metric_quality` MCP tools. Verified
+  live (3 metrics incl. a ratio).
 - **dbt exposures → blast radius**: the dbt normalizer extracts exposures
   (type/maturity/owner/url); warehouse objects gain `dbt.exposures` (the
   dashboards/ML/apps they feed via lineage); an `impacts_exposure` risk (high) fires

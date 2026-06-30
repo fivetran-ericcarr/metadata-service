@@ -72,3 +72,11 @@ def test_get_impact_returns_blast_radius(seeded_settings):
     assert impact["name"] == "account"
     assert impact["downstream_models"]
     assert any(e["name"] == "account_dashboard" for e in impact["exposures"])
+
+
+def test_list_and_get_metric_quality(seeded_settings):
+    listed = tools.list_metrics(settings=seeded_settings)
+    assert any(m["metric"] == "total_accounts" for m in listed["metrics"])
+    detail = tools.get_metric_quality("total_accounts", settings=seeded_settings)
+    assert detail["trust_level"] == "at_risk"
+    assert detail["upstream_object_count"] >= 1

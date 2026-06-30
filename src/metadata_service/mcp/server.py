@@ -73,6 +73,17 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
         return tools.get_impact(schema, table)
 
     @server.tool()
+    def list_metrics() -> dict:
+        """Semantic Layer metrics with a trust level (trusted|watch|at_risk) from
+        the DQ posture of their upstream objects."""
+        return tools.list_metrics()
+
+    @server.tool()
+    def get_metric_quality(metric: str) -> dict:
+        """Trust detail for one governed metric: upstream objects + failing tests."""
+        return tools.get_metric_quality(metric)
+
+    @server.tool()
     def get_dq_recommendations(
         schema: str | None = None,
         table: str | None = None,

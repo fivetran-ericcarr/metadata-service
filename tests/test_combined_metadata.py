@@ -63,6 +63,20 @@ def test_exposures_attached_and_impact_risk(built_doc):
     assert recs[0]["details"]["exposures"][0]["name"] == "account_dashboard"
 
 
+def test_metric_quality_and_attachment(built_doc):
+    account = object_by_table(built_doc, "salesforce", "account")
+    assert any(m["name"] == "total_accounts" for m in account["dbt"]["metrics"])
+    # account has a failing test -> the governed metric is at risk
+    mq = {m["metric"]: m for m in built_doc["metric_quality"]}
+    assert "total_accounts" in mq
+    assert mq["total_accounts"]["trust_level"] == "at_risk"
+    assert account["object_id"] in mq["total_accounts"]["upstream_objects"]
+    # and a metric_at_risk recommendation fires on the object
+    recs = [r for r in built_doc["dq_recommendations"]
+            if r["object_id"] == account["object_id"] and r.get("risk") == "metric_at_risk"]
+    assert recs and recs[0]["details"]["metrics"][0]["name"] == "total_accounts"
+
+
 def test_unmatched_object_has_no_exposures(built_doc):
     contact = object_by_table(built_doc, "salesforce", "contact")
     assert contact["dbt"]["exposures"] == []

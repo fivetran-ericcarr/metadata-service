@@ -180,6 +180,27 @@ def get_impact(schema: str, table: str, settings: Settings | None = None) -> dic
     }
 
 
+def list_metrics(settings: Settings | None = None) -> dict:
+    """Semantic Layer metrics with a trust level derived from the DQ posture of
+    their upstream objects (trusted | watch | at_risk | unknown)."""
+    settings = settings or get_settings()
+    mq = _latest(settings).get("metric_quality", [])
+    return {"count": len(mq), "metrics": [
+        {"metric": m["metric"], "label": m.get("label"), "type": m.get("type"),
+         "trust_level": m.get("trust_level"), "upstream_object_count": m.get("upstream_object_count")}
+        for m in mq
+    ]}
+
+
+def get_metric_quality(metric: str, settings: Settings | None = None) -> dict:
+    """Full trust detail for one governed metric: upstream objects + failing tests."""
+    settings = settings or get_settings()
+    for m in _latest(settings).get("metric_quality", []):
+        if (m.get("metric") or "").lower() == metric.lower():
+            return m
+    return {"found": False, "message": f"No metric named {metric!r}."}
+
+
 def get_dq_summary(settings: Settings | None = None) -> dict:
     """Account-level DQ rollup — the orienting call an agent makes first."""
     settings = settings or get_settings()

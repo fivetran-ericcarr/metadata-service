@@ -38,6 +38,8 @@ class DbtNormalizer:
         self._attach_tests(tests, models, sources)
         lineage_edges = self._build_lineage(manifest_nodes, manifest_exposures)
         exposures = self._build_exposures(manifest_exposures)
+        metrics, semantic_models = self._build_metrics(
+            manifest.get("metrics") or {}, manifest.get("semantic_models") or {})
 
         return {
             "extracted_at": raw.get("extracted_at"),
@@ -49,9 +51,51 @@ class DbtNormalizer:
             "sources": sources,
             "tests": tests,
             "exposures": exposures,
+            "metrics": metrics,
+            "semantic_models": semantic_models,
             "lineage_edges": lineage_edges,
             "errors": warnings,
         }
+
+    @staticmethod
+    def _build_metrics(metrics: dict, semantic: dict) -> tuple[list[dict], list[dict]]:
+        """Extract metrics + semantic models, resolving each metric to its
+        upstream dbt model unique_ids (metric -> semantic_model/metric -> model)."""
+        sm_models: dict[str, list[str]] = {}
+        sm_out: list[dict] = []
+        for uid, sm in (semantic or {}).items():
+            models = [n for n in (sm.get("depends_on") or {}).get("nodes") or [] if n.startswith("model.")]
+            sm_models[uid] = models
+            sm_out.append({
+                "unique_id": uid, "name": sm.get("name"),
+                "model_unique_ids": models,
+                "measures": [m.get("name") for m in sm.get("measures") or []],
+            })
+
+        deps = {uid: (m.get("depends_on") or {}).get("nodes") or [] for uid, m in (metrics or {}).items()}
+
+        def resolve(uid: str, seen: set[str]) -> set[str]:
+            if uid in seen:
+                return set()
+            seen.add(uid)
+            found: set[str] = set()
+            for dep in deps.get(uid, []):
+                if dep.startswith("semantic_model."):
+                    found |= set(sm_models.get(dep, []))
+                elif dep.startswith("metric."):
+                    found |= resolve(dep, seen)
+                elif dep.startswith("model."):
+                    found.add(dep)
+            return found
+
+        met_out: list[dict] = []
+        for uid, m in (metrics or {}).items():
+            met_out.append({
+                "unique_id": uid, "name": m.get("name"), "label": m.get("label"),
+                "type": m.get("type"), "description": m.get("description"),
+                "model_unique_ids": sorted(resolve(uid, set())),
+            })
+        return met_out, sm_out
 
     @staticmethod
     def _build_exposures(exposures: dict) -> list[dict]:

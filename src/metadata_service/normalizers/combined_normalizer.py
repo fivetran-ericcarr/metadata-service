@@ -39,6 +39,8 @@ class CombinedNormalizer:
         models = dbt_normalized.get("models") or []
         sources = dbt_normalized.get("sources") or []
         exposures = dbt_normalized.get("exposures") or []
+        metrics = dbt_normalized.get("metrics") or []
+        semantic_models = dbt_normalized.get("semantic_models") or []
         lineage = LineageGraph(dbt_normalized.get("lineage_edges"))
 
         source_index = _index_dbt(sources, id_field="identifier", name_field="table_name")
@@ -53,13 +55,15 @@ class CombinedNormalizer:
             for table in conn.get("tables", []) or []:
                 obj = self._build_object(
                     conn, table, source_index, model_index,
-                    sources_by_uid, models_by_uid, lineage, exposures,
+                    sources_by_uid, models_by_uid, lineage, exposures, metrics,
                 )
                 recs = recommend_for_object(obj, stale_threshold_hours=self._stale_hours)
                 self._apply_recommendations(obj, recs)
                 obj["dq_summary"] = self._summarize(obj, recs)
                 warehouse_objects.append(obj)
                 all_recommendations.extend(recs)
+
+        metric_quality = self._build_metric_quality(metrics, warehouse_objects)
 
         errors = list(fivetran_normalized.get("errors") or []) + list(dbt_normalized.get("errors") or [])
 
@@ -81,18 +85,21 @@ class CombinedNormalizer:
                     "sources": sources,
                     "tests": dbt_normalized.get("tests") or [],
                     "exposures": exposures,
+                    "metrics": metrics,
+                    "semantic_models": semantic_models,
                     "lineage_edges": dbt_normalized.get("lineage_edges") or [],
                 },
             },
             "warehouse_objects": warehouse_objects,
             "dq_recommendations": all_recommendations,
+            "metric_quality": metric_quality,
             "schema_drift": [],
             "errors": errors,
         }
 
     # -- per-object -------------------------------------------------------
     def _build_object(self, conn, table, source_index, model_index,
-                      sources_by_uid, models_by_uid, lineage, exposures=None) -> dict:
+                      sources_by_uid, models_by_uid, lineage, exposures=None, metrics=None) -> dict:
         dest_schema = table.get("destination_schema")
         dest_table = table.get("destination_table")
         object_id = build_object_id(None, dest_schema, dest_table, warehouse=self._warehouse)
@@ -113,6 +120,7 @@ class CombinedNormalizer:
         object_tests = self._collect_tests(source_obj, model_uids, models_by_uid)
         freshness = self._freshness(source_obj)
         object_exposures = self._collect_exposures(source_uid, model_uids, exposures)
+        object_metrics = self._collect_metrics(model_uids, metrics)
 
         columns = self._build_columns(table, source_obj, model_uids, models_by_uid, object_tests)
 
@@ -138,6 +146,7 @@ class CombinedNormalizer:
                 "model_unique_ids": model_uids,
                 "tests": object_tests,
                 "exposures": object_exposures,
+                "metrics": object_metrics,
                 "freshness": freshness,
             },
             "columns": columns,
@@ -185,6 +194,45 @@ class CombinedNormalizer:
                     "url": exp.get("url"),
                     "owner_name": exp.get("owner_name"),
                 })
+        return out
+
+    @staticmethod
+    def _collect_metrics(model_uids, metrics) -> list[dict]:
+        """Semantic Layer metrics whose upstream models include this object's models."""
+        if not metrics:
+            return []
+        owned = set(model_uids)
+        out: list[dict] = []
+        for m in metrics:
+            if set(m.get("model_unique_ids") or []) & owned:
+                out.append({"name": m.get("name"), "label": m.get("label"), "type": m.get("type")})
+        return out
+
+    @staticmethod
+    def _build_metric_quality(metrics, warehouse_objects) -> list[dict]:
+        """Per-metric trust rollup from the DQ posture of its upstream objects."""
+        out: list[dict] = []
+        for m in metrics or []:
+            metric_models = set(m.get("model_unique_ids") or [])
+            upstream = [o for o in warehouse_objects
+                        if set((o.get("dbt") or {}).get("model_unique_ids") or []) & metric_models]
+            failing = sum((o.get("dq_summary") or {}).get("failing_tests_count", 0) for o in upstream)
+            risk_levels = {(o.get("dq_summary") or {}).get("risk_level") for o in upstream}
+            if "high" in risk_levels or failing > 0:
+                trust = "at_risk"
+            elif "medium" in risk_levels:
+                trust = "watch"
+            elif upstream:
+                trust = "trusted"
+            else:
+                trust = "unknown"
+            out.append({
+                "metric": m.get("name"), "label": m.get("label"), "type": m.get("type"),
+                "trust_level": trust,
+                "upstream_object_count": len(upstream),
+                "upstream_objects": [o.get("object_id") for o in upstream],
+                "failing_tests": failing,
+            })
         return out
 
     @staticmethod

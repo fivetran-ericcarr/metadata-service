@@ -232,6 +232,19 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
             ]},
         })
 
+    # Metric trust: a DQ problem on this object reaches a governed Semantic Layer metric.
+    metrics = dbt_section.get("metrics") or []
+    if metrics and (_has_failing_tests(dbt_section) or stale or not is_matched):
+        recs.append({
+            "object_id": object_id,
+            "recommendation_type": "risk",
+            "risk": "metric_at_risk",
+            "severity": "high",
+            "reason": "A data-quality problem on this object affects governed metrics.",
+            "target": dict(target_base),
+            "details": {"metrics": [{"name": m.get("name"), "type": m.get("type")} for m in metrics]},
+        })
+
     return recs
 
 

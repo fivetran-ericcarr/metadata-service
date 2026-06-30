@@ -118,5 +118,20 @@
       "owner": { "name": "Analytics", "email": "analytics@example.com" },
       "depends_on": { "nodes": ["model.demo.dim_account"] }
     }
+  },
+  "semantic_models": {
+    "semantic_model.demo.accounts": {
+      "name": "accounts",
+      "depends_on": { "nodes": ["model.demo.dim_account"] },
+      "measures": [{ "name": "account_count" }]
+    }
+  },
+  "metrics": {
+    "metric.demo.total_accounts": {
+      "name": "total_accounts",
+      "label": "Total Accounts",
+      "type": "simple",
+      "depends_on": { "nodes": ["semantic_model.demo.accounts"] }
+    }
   }
 }
