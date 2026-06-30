@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `CHANGELOG.md` to track changes as they are made.
 - `ARTIFACTS.md` documenting every JSON artifact the service produces.
+- `docs/use-cases/github-snowflake-dbt.md` — a live end-to-end reference build
+  (GitHub → Fivetran → Snowflake → dbt → metadata-service) with real results.
+- `.gitignore` now excludes private keys (`*.pem`, `*.p8`, `*.key`, `rsa_key*`).
 - Fivetran connection filters `--connected-only` (skip broken/incomplete setups)
   and `--skip-paused` (skip paused connections), exposed on both
   `fivetran extract` and `build` and threaded through the extractor and pipeline.

@@ -5,6 +5,10 @@ A Python service that extracts, normalizes, stores, and serves metadata from
 application. It replaces a manually uploaded JSON metadata file with an automated
 metadata pipeline plus optional REST and MCP interfaces.
 
+> **Live reference build:** [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
+> walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
+> (76 warehouse objects, 7 joined to dbt, 223 DQ recommendations).
+
 ## 1. Project Purpose
 
 Capgemini (and similar teams) build agentic Data Quality solutions on top of

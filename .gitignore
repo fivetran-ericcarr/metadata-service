@@ -10,6 +10,11 @@ venv/
 
 # Environment / secrets
 .env
+# Private keys / credentials (never commit)
+*.pem
+*.p8
+*.key
+rsa_key*
 
 # Metadata snapshots (local storage backend)
 metadata_snapshots/
