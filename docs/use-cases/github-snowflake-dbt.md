@@ -200,6 +200,49 @@ Enriched 75 primary-key columns from fivetran_metadata
 tagged `key_source: "fivetran_platform"`. This is the modern, authoritative PK/lineage
 source (the standalone Metadata REST API is deprecated).
 
+## dbt Platform value-adds (Enterprise data trust)
+
+The same build also demonstrates four dbt Platform capabilities that turn
+table-level QA into a business-impact-aware data-trust layer — the differentiator
+for FinServ / HCLS / MFG buyers and their auditors. All are live on this build.
+
+- **Exposures → blast radius.** The project defines two exposures (a *Repo Health*
+  dashboard and an *Issue Triage* ML model). The service attaches them to every
+  upstream object's `dbt.exposures`, and `get_impact(github, issue)` returns the
+  downstream models **and** those two business consumers. If a DQ problem hits an
+  object feeding an exposure, an `impacts_exposure` (high) risk fires.
+- **Semantic Layer metric trust.** Three governed metrics (`total_open_issues`,
+  `total_issues`, `open_issue_rate`) are resolved to their upstream models (including
+  the ratio metric, through its constituent metrics). A `metric_quality` rollup scores
+  each metric's trust from its upstream DQ posture — here `watch`, because the inputs
+  are tested but still carry open recommendations.
+- **Column-level lineage.** dbt's API exposes only node-level lineage, so the service
+  parses compiled SQL with sqlglot into **74 column→column edges**.
+  `get_column_impact(github, repository, id)` traces `repository.id` →
+  `stg_github__repository.repository_id` → `…__repository_issue_summary.repository_id`
+  → all three metrics + the dashboard.
+- **Model governance.** The mart carries an **enforced contract**, `access: public`,
+  a `group`, and an owner. The service surfaces `dbt.governance` per object and flags
+  the gaps: **4 `missing_model_contract`** and **4 `unowned_object`** risks on the
+  staging-only paths.
+
+## Example agent questions (on the demo data)
+
+How a Capgemini DQ agent answers real questions using the MCP tools over this exact
+snapshot (110 objects, 7 modeled, 0 failing tests). The service locates and explains
+the risk; for raw row counts the agent reads a failing test's `failures` count or
+queries the warehouse.
+
+| Question | Tools used | Answer on the demo data |
+|---|---|---|
+| **What are the biggest data-quality problems right now?** | `get_dq_summary` | Coverage: **103 of 110 replicated tables have no dbt tests** (unknown quality) — the dominant risk. Then **4 models without an enforced contract**, **4 without an owner**, and **6 columns name-flagged as potential PII**. Zero tests are failing. |
+| **How many users signed up with incomplete/invalid info?** | `get_warehouse_object(github, user)` → `dbt.tests` | Completeness *is* asserted: `user_login` has a `not_null` test and the id is `unique` — both **pass**, so no missing logins or duplicate users. (If a rule failed, its `failures` field = the count of bad rows. No `email` test exists yet → recommend one; note `user.email` is also flagged PII.) |
+| **If we drop or hash `issue.user_id`, what breaks?** | `get_column_impact(github, issue, user_id)` | It feeds `stg_github__issue.user_id`, which feeds **both** business consumers: the *Repo Health* dashboard and the *Issue Triage* ML model. |
+| **Can we trust the `open_issue_rate` metric?** | `get_metric_quality(open_issue_rate)` | **Watch** — its upstream objects (issue, pull_request, repository) are tested with no failures, but still carry open test recommendations, so it isn't fully `trusted` yet. Nothing failing → no hard breakage. |
+| **Which sensitive columns are exposed un-hashed?** | `get_dq_recommendations(recommendation_type=signal)` | `commit.author_email`, `commit.committer_email`, `user.email`, `user.phone`, `user_email.email` — review for masking. (Heuristic; `user.email_disabled` is an over-match.) |
+| **Is anything feeding the Repo Health dashboard at risk?** | `get_impact` / `list_warehouse_objects(failing_tests=true)` | The dashboard's inputs (issue, pull_request, repository) all pass tests and aren't stale — **healthy**. Any failure would raise `impacts_exposure`. |
+| **Which models violate governance?** | `get_dq_recommendations(risk=missing_model_contract)` / `unowned_object` | The four staging-only paths (e.g. `label`, `pull_request_review`) — no enforced contract, no owner. The mart path is contracted, public, and owned. |
+
 ## Lessons learned (real findings from this build)
 
 1. **Fivetran's config API does not expose `is_primary_key` for the GitHub
