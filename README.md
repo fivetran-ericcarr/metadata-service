@@ -193,7 +193,10 @@ uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remo
 |---|---|---|
 | `get_dq_summary()` | **Start here.** Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
 | `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). | ~0.3 KB/row |
-| `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, dq_summary). | ~few KB |
+| `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, exposures, metrics, governance, dq_summary). | ~few KB |
+| `get_impact(schema, table)` | **Blast radius**: downstream dbt models + exposures (dashboards/ML/apps). | small |
+| `get_column_impact(schema, table, column)` | **Column-level** blast radius: downstream columns + affected metrics + exposures. | small |
+| `list_metrics()` / `get_metric_quality(metric)` | Governed Semantic Layer metrics with a **trust level** from upstream DQ posture. | small |
 | `get_dq_recommendations(schema, table, recommendation_type, confidence, risk, limit)` | Per-object **or** cross-snapshot recommendation filtering. | scales with filter |
 | `get_schema_drift(schema, table, severity)` | Drift records since the previous snapshot. | scales with filter |
 | `get_latest_metadata(scope)` | Full snapshot (large — prefer the tools above). | up to ~400 KB |

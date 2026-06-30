@@ -330,6 +330,23 @@ Risk values: `missing_dbt_coverage` (medium), `failing_dbt_tests` (high),
 | `untested_dbt_object` (matched to dbt but no tests) | `risk` | `medium` |
 | `failing_dbt_tests` | `risk` | `high` |
 | `stale_fivetran_sync` | `risk` | `high` (threshold `STALE_SYNC_THRESHOLD_HOURS`, default 24h) |
+| `impacts_exposure` (a DQ problem reaches a dashboard/ML/app) | `risk` | `high` |
+| `metric_at_risk` (a DQ problem reaches a governed Semantic Layer metric) | `risk` | `high` |
+| `missing_model_contract` (downstream model uncontracted; high if public) | `risk` | `medium`/`high` |
+| `unowned_object` (modeled but no owner/group) | `risk` | `medium` |
+
+### dbt Platform fields (from the manifest + Discovery API)
+
+Beyond models/sources/tests, each `warehouse_objects[].dbt` may carry:
+
+- `exposures[]` — dashboards/ML/apps it feeds (blast radius). Doc-level
+  `sources.dbt.exposures` lists all.
+- `metrics[]` — Semantic Layer metrics it feeds. Doc-level `metric_quality[]` gives a
+  per-metric `trust_level` (trusted|watch|at_risk) from upstream DQ posture.
+- `governance` — `{has_enforced_contract, owners, groups, access_levels,
+  uncontracted_public_models}`.
+- `sources.dbt.column_lineage_edges` — `{from_unique_id, from_column, to_unique_id,
+  to_column}` column→column edges (sqlglot), powering `get_column_impact`.
 
 ### 2.5 `schema_drift[]`
 
