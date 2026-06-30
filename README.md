@@ -72,20 +72,34 @@ src/metadata_service/
 
 ## 3. Setup
 
+Recommended — [**uv**](https://docs.astral.sh/uv/) (reproducible: installs from the
+committed `uv.lock` on the pinned Python in `.python-version`):
+
+```bash
+uv sync --all-extras                  # creates .venv + installs everything from the lock
+uv run metadata-service build ...     # run without activating
+
+cp .env.example .env                  # then fill in credentials
+```
+
+Pick specific extras instead of `--all-extras` with `--extra dev --extra mcp` (s3, mcp).
+
+<details>
+<summary>Fallback — pip + venv (no uv)</summary>
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"        # add ,s3 and/or ,mcp extras as needed
-
-cp .env.example .env           # then fill in credentials
-```
-
-Optional extras:
-
-```bash
+pip install -e ".[dev]"        # add ,s3 and/or ,mcp extras as needed:
 pip install -e ".[dev,s3]"     # S3 storage backend (boto3)
 pip install -e ".[dev,mcp]"    # MCP server (official Python MCP SDK)
+
+cp .env.example .env
 ```
+
+The package is standard `pyproject.toml`; uv and pip read the same metadata, so
+either workflow works. The `uv.lock` pins the reference environment.
+</details>
 
 ## 4. Environment Variables
 
@@ -168,9 +182,9 @@ The MCP server is the drop-in hook for an agentic Data Quality application: a
 narrow, token-efficient tool surface over the normalized metadata.
 
 ```bash
-pip install -e ".[mcp]"
-metadata-service serve-mcp                          # stdio (local subprocess agents)
-metadata-service serve-mcp --transport http --port 8765   # hosted / remote agents
+uv sync --extra mcp        # or: pip install -e ".[mcp]"
+uv run metadata-service serve-mcp                          # stdio (local subprocess agents)
+uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remote agents
 ```
 
 ### Tools (designed for agent triage → drill-down)
@@ -206,6 +220,9 @@ small instead of pulling the whole 400 KB snapshot.
   }
 }
 ```
+
+With uv (no activated env): set `"command": "uv"`, `"args": ["run", "metadata-service",
+"serve-mcp"]`, and add `"cwd": "/path/to/metadata-service"`.
 
 **Hosted (HTTP)** — for a remote agent in a DQaaS platform:
 

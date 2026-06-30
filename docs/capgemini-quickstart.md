@@ -106,24 +106,26 @@ sequenceDiagram
 ## 4. 5-minute quickstart
 
 ```bash
-# install
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,mcp]"
+# install (uv recommended — reproducible from uv.lock; pip/venv also works)
+uv sync --all-extras
 
 # try it with zero credentials (bundled fixtures)
 ./examples/demo.sh
 
 # OR run against live systems
 cp .env.example .env          # fill in FIVETRAN_* and DBT_* creds
-metadata-service build --group-id <fivetran_group> --dbt-project-id <dbt_project_id>
+uv run metadata-service build --group-id <fivetran_group> --dbt-project-id <dbt_project_id>
 
 # serve to agents
-metadata-service serve-mcp                              # local (stdio)
-metadata-service serve-mcp --transport http --port 8765 # hosted agents -> http://host:8765/mcp
+uv run metadata-service serve-mcp                               # local (stdio)
+uv run metadata-service serve-mcp --transport http --port 8765  # hosted -> http://host:8765/mcp
 
 # run the example agent
-python examples/agent_quickstart.py
+uv run python examples/agent_quickstart.py
 ```
+
+> Prefer pip? `python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev,mcp]"`,
+> then drop the `uv run` prefix.
 
 See [examples/](../examples/) for the runnable agent client, REST curl script, and
 the offline demo.

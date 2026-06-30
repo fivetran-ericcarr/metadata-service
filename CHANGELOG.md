@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `docs/assets/architecture.svg`.
 - `examples/` — runnable `agent_quickstart.py` (MCP triage flow, stdio + http),
   `rest_quickstart.sh`, and a self-contained offline `demo.sh`.
+- uv support: committed `uv.lock` + `.python-version` (3.11) for a reproducible
+  reference environment. README and quickstart lead with `uv sync` / `uv run`;
+  pip + venv retained as a documented fallback (same `pyproject.toml`). Tests pass
+  on the locked Python 3.11 environment.
 
 ### Changed
 - Fivetran connection filters `--connected-only` / `--skip-paused` on `fivetran
