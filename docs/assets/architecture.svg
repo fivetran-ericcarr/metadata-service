@@ -15,7 +15,7 @@
   <text x="450" y="30" text-anchor="middle" class="tb" font-size="17">Fivetran + dbt Metadata Service — DQaaS grounding layer</text>
 
   <!-- Sources -->
-  <rect x="330" y="56" width="240" height="48" rx="10" fill="#E8EEF7" stroke="#4A6FA5" stroke-width="1.5"/>
+  <rect x="260" y="56" width="380" height="48" rx="10" fill="#E8EEF7" stroke="#4A6FA5" stroke-width="1.5"/>
   <text x="450" y="85" text-anchor="middle" class="t">Source systems — GitHub · Salesforce · Postgres · SaaS</text>
 
   <!-- arrow to warehouse -->
