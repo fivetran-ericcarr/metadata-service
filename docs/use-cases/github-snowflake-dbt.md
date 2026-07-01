@@ -11,7 +11,7 @@ produces actionable Data Quality output.
 | **Source** | GitHub repo [`fivetran/dbt_github`](https://github.com/fivetran/dbt_github) |
 | **Replication** | Fivetran GitHub connector → Snowflake (`ERICC_TEST_DB.github`) |
 | **Transformation** | dbt project [`github-dq-dbt`](https://github.com/fivetran-ericcarr/github-dq-dbt): 7 staging models + 1 mart + DQ tests + source freshness |
-| **Metadata join** | `metadata-service build` → 76 warehouse objects, 7 joined to dbt, 223 DQ recommendations, 0 errors |
+| **Metadata join** | `metadata-service build` → 110 warehouse objects, 7 joined to dbt, 455 recommendations, 0 errors |
 
 ```text
 GitHub (fivetran/dbt_github)
@@ -31,15 +31,19 @@ latest.json  ── warehouse_objects joined Fivetran↔dbt, dq_recommendations,
 | Layer | Object | How |
 |---|---|---|
 | Fivetran | GitHub connector `pungent_delegator` in group `quit_paging` | `POST /v1/connectors` (`auth_mode: PersonalAccessToken`, `sync_mode: SpecificRepositories`) |
-| Snowflake | destination `ERICC_TEST_DB`, schema `github` | existing Fivetran destination |
+| Fivetran | Platform Connector `oriented_assemblage` (`fivetran_log`) → `fivetran_metadata` schema | authoritative PKs/lineage for the warehouse reader |
+| Snowflake | destination `ERICC_TEST_DB`, schemas `github` + `fivetran_metadata` | existing Fivetran destination |
 | dbt Cloud | Snowflake connection (key-pair), credentials, **Production** deployment env, repo (deploy key), `dbt build` job | dbt Cloud Admin API v3/v2 |
-| Git | [`fivetran-ericcarr/github-dq-dbt`](https://github.com/fivetran-ericcarr/github-dq-dbt) | hand-built staging + `schema.yml` tests |
+| Git | [`fivetran-ericcarr/github-dq-dbt`](https://github.com/fivetran-ericcarr/github-dq-dbt) | hand-built staging + mart + Semantic Layer + exposures + governed contract |
 
 The dbt layer is **hand-built** (not the Fivetran Quickstart package): a `github`
 source with freshness, staging models for `repository`, `user`, `issue`,
 `pull_request`, `issue_comment`, `label`, `pull_request_review`, and tests —
 `not_null`/`unique` on PKs, `relationships` across entities (some `warn`), and
-`accepted_values` on the `state` fields.
+`accepted_values` on the `state` fields. On top of staging it adds a
+`github__repository_issue_summary` **mart**, a **Semantic Layer** (semantic model +
+three metrics), two **exposures** (a dashboard and an ML model), and an **enforced
+contract** with an owner/group — to exercise the dbt Platform value-adds below.
 
 ## Reproduce
 
@@ -56,7 +60,9 @@ source with freshness, staging models for `repository`, `user`, `issue`,
 #    - create a Production deployment environment + a `dbt build` + `dbt source freshness` job
 #    - run the job (produces manifest.json / run_results.json / catalog.json / sources.json)
 
-# 3. metadata-service: join Fivetran + dbt and write a snapshot
+# 3. metadata-service: join Fivetran + dbt and write a snapshot.
+#    Set WAREHOUSE_TYPE=snowflake + WAREHOUSE_* (and add a fivetran_log Platform
+#    Connector) to enrich authoritative PKs from the fivetran_metadata schema.
 metadata-service build --group-id quit_paging --dbt-project-id 467825 \
   --connected-only --skip-paused
 
@@ -67,26 +73,31 @@ metadata-service serve-api   # GET /metadata/warehouse-objects?schema=github
 ## Results
 
 ```text
-warehouse objects: 76 | matched: 7 | unmatched: 69
+warehouse objects: 110 | matched: 7 | unmatched: 103
 ```
+
+(Models/tests below reflect the final build — the mart adds a second downstream
+model to issue/pull_request/repository, and its tests attach via lineage.)
 
 | Object | Match | Models | dbt tests | Freshness |
 |---|---|---|---|---|
-| issue | exact_schema_table | 1 | 6 | pass |
+| issue | exact_schema_table | 2 | 12 | pass |
 | issue_comment | exact_schema_table | 1 | 4 | pass |
 | label | exact_schema_table | 1 | 3 | pass |
-| pull_request | exact_schema_table | 1 | 3 | pass |
+| pull_request | exact_schema_table | 2 | 9 | pass |
 | pull_request_review | exact_schema_table | 1 | 5 | pass |
-| repository | exact_schema_table | 1 | 5 | pass |
+| repository | exact_schema_table | 2 | 11 | pass |
 | user | case_insensitive_schema_table | 1 | 3 | pass |
 
 - The match was **deterministic on schema + table** (`github.issue` ↔
   `source.github_dq.github.issue`) — no aliases.
 - `user` matched case-insensitively because Snowflake stores the (reserved-word)
   identifier upper-cased while Fivetran reports it lower-cased.
-- The 69 unmatched tables are the GitHub tables we chose not to model — they
-  surface as `missing_dbt_coverage` risks.
-- Recommendations: **157 `dbt_test`** + **66 `missing_dbt_coverage` risks**.
+- The 103 unmatched tables — the un-modeled GitHub tables plus the Platform
+  Connector's own `fivetran_metadata` tables (added when the warehouse reader was
+  enabled) — surface as `missing_dbt_coverage`.
+- Recommendations: **341 `dbt_test`** + **108 risks** (100 `missing_dbt_coverage`,
+  4 `missing_model_contract`, 4 `unowned_object`) + **6 signals**.
 
 ### Spotlight: `github.issue` (joined warehouse object)
 
@@ -166,20 +177,21 @@ is ~407 KB, so agents triage via compact tools instead of pulling everything.
 
 ```json
 {
-  "object_count": 76, "matched": 7, "unmatched": 69,
-  "risk_levels": {"low": 3, "medium": 73, "high": 0},
+  "object_count": 110, "matched": 7, "unmatched": 103,
+  "risk_levels": {"low": 0, "medium": 110, "high": 0},
   "objects_with_failing_tests": 0,
-  "objects_missing_dbt_coverage": 69,
+  "objects_missing_dbt_coverage": 103,
   "objects_with_freshness": 7,
-  "recommendations": {"total": 223, "by_type": {"dbt_test": 157, "risk": 66},
-                       "by_confidence": {"heuristic": 157},
-                       "by_risk": {"missing_dbt_coverage": 66}},
-  "drift": {"total": 18, "by_severity": {"low": 18}}
+  "recommendations": {"total": 455,
+                       "by_type": {"dbt_test": 341, "risk": 108, "signal": 6},
+                       "by_risk": {"missing_dbt_coverage": 100,
+                                   "missing_model_contract": 4, "unowned_object": 4}},
+  "drift": {"total": 0, "by_severity": {}}
 }
 ```
 
 Typical flow: `get_dq_summary()` → `list_warehouse_objects(missing_coverage=true)`
-(20 KB for 69 rows vs 194 KB full) → `get_warehouse_object()` /
+(compact rows for the 103 uncovered tables vs the full snapshot) → `get_warehouse_object()` /
 `get_dq_recommendations()` to act. Served over stdio (local) or HTTP (hosted) —
 see the [MCP Usage](../../README.md#7-mcp-usage) section.
 

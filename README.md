@@ -11,7 +11,8 @@ metadata pipeline plus optional REST and MCP interfaces.
 >
 > **Live reference build:** [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
 > walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
-> (76 warehouse objects, 7 joined to dbt, 223 DQ recommendations).
+> (110 warehouse objects, 7 joined to dbt, 455 recommendations) — with exposures /
+> blast radius, Semantic Layer metric trust, column-level lineage, and dbt governance.
 
 ## 1. Project Purpose
 
@@ -25,10 +26,15 @@ a DQ agent answer questions like:
 - Is source freshness passing? Did schema drift occur since the last snapshot?
 - Which tables are enabled in Fivetran but missing dbt tests?
 - What dbt tests should be recommended from Fivetran metadata?
+- If a column is dropped or hashed, which downstream columns, metrics, and
+  dashboards break? (column-level lineage + blast radius)
+- Can we trust a given governed Semantic Layer metric?
+- Which modeled objects lack an enforced contract or an owner?
 
 Fivetran is the system of record for replicated source metadata; dbt Platform is
 the system of record for transformation/analytics metadata. This service joins
-the two into `warehouse_objects` and layers DQ recommendations + drift on top.
+the two into `warehouse_objects`, then layers on DQ recommendations, drift,
+business-impact (exposures), metric trust, column-level lineage, and governance.
 
 ## 2. Architecture
 
@@ -251,10 +257,12 @@ Top-level snapshot shape (`latest.json`):
   "sources": {
     "fivetran": { "extracted_at": "...", "connections": [] },
     "dbt": { "extracted_at": "...", "projects": [], "environments": [], "jobs": [],
-             "runs": [], "models": [], "sources": [], "tests": [], "lineage_edges": [] }
+             "runs": [], "models": [], "sources": [], "tests": [], "exposures": [],
+             "metrics": [], "semantic_models": [], "lineage_edges": [], "column_lineage_edges": [] }
   },
   "warehouse_objects": [],
   "dq_recommendations": [],
+  "metric_quality": [],
   "schema_drift": [],
   "errors": []
 }

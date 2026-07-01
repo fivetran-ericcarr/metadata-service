@@ -90,6 +90,7 @@ The primary artifact. Top-level shape:
   "sources": { "fivetran": { ... }, "dbt": { ... } },
   "warehouse_objects": [ ... ],
   "dq_recommendations": [ ... ],
+  "metric_quality": [ ... ],
   "schema_drift": [ ... ],
   "errors": [ ... ]
 }
@@ -103,6 +104,7 @@ The primary artifact. Top-level shape:
 | `sources.dbt` | object | Normalized dbt metadata (section 2.2) |
 | `warehouse_objects` | array | Joined Fivetran + dbt objects (section 2.3) |
 | `dq_recommendations` | array | DQ recommendations / risks / signals (section 2.4) |
+| `metric_quality` | array | Per-metric Semantic Layer trust rollup (`{metric, trust_level, upstream_objects, failing_tests}`) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
 

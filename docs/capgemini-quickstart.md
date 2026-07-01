@@ -142,12 +142,13 @@ From the live reference build (GitHub → Fivetran → Snowflake → dbt), `get_
 
 ```json
 {
-  "object_count": 76, "matched": 7, "unmatched": 69,
-  "risk_levels": {"low": 3, "medium": 73, "high": 0},
+  "object_count": 110, "matched": 7, "unmatched": 103,
+  "risk_levels": {"low": 0, "medium": 110, "high": 0},
   "objects_with_failing_tests": 0,
-  "objects_missing_dbt_coverage": 69,
-  "recommendations": {"total": 223, "by_type": {"dbt_test": 157, "risk": 66}},
-  "drift": {"total": 18, "by_severity": {"low": 18}}
+  "objects_missing_dbt_coverage": 103,
+  "recommendations": {"total": 455, "by_type": {"dbt_test": 341, "risk": 108, "signal": 6},
+                      "by_risk": {"missing_dbt_coverage": 100,
+                                  "missing_model_contract": 4, "unowned_object": 4}}
 }
 ```
 
