@@ -166,6 +166,41 @@ def test_mcp_summary_and_impact_include_activations(seeded_settings):
     assert [a["sync_id"] for a in impact["activations"]] == [900]
 
 
+def test_column_impact_reaches_destination_field(tmp_path):
+    # Synthetic doc: a source column feeds the activation source model's column,
+    # which is mapped to a Salesforce field. Exercises the activation_fields branch.
+    from metadata_service.storage.local_storage import LocalStorage
+
+    doc = {
+        "generated_at": "2026-06-30T00:00:00Z",
+        "version": "1.0",
+        "sources": {"dbt": {"metrics": [], "exposures": [], "column_lineage_edges": [
+            {"from_unique_id": "source.d.raw.churn_src", "from_column": "customer_email",
+             "to_unique_id": "model.d.customer_churn", "to_column": "email"},
+        ]}},
+        "warehouse_objects": [{
+            "object_id": "warehouse://d/raw/churn_src", "schema": "raw", "name": "churn_src",
+            "dbt": {"source_unique_id": "source.d.raw.churn_src", "model_unique_ids": ["model.d.customer_churn"]},
+            "columns": [], "dq_summary": {},
+        }],
+        "activations": {"syncs": [{
+            "sync_id": 900, "label": "churn", "destination_name": "sf", "destination_object": "Contact",
+            "mappings": [{"source_column": "email", "destination_field": "Email", "is_primary_identifier": True}],
+            "readiness": {"verdict": "block", "source_node_unique_id": "model.d.customer_churn"},
+        }]},
+        "dq_recommendations": [], "metric_quality": [], "schema_drift": [], "errors": [],
+    }
+    settings = Settings(metadata_storage_backend="local", metadata_local_path=str(tmp_path))
+    LocalStorage(str(tmp_path)).write_snapshot(doc)
+
+    ci = tools.get_column_impact("raw", "churn_src", "customer_email", settings=settings)
+    assert {a["unique_id"] for a in ci["affected_columns"]} == {"model.d.customer_churn"}
+    assert ci["activation_fields"] == [{
+        "sync_id": 900, "destination_name": "sf", "destination_object": "Contact",
+        "destination_field": "Email", "source_column": "email", "readiness_verdict": "block",
+    }]
+
+
 def test_rest_activation_endpoints(tmp_path, monkeypatch):
     settings = Settings(metadata_storage_backend="local", metadata_local_path=str(tmp_path))
     monkeypatch.setattr("metadata_service.api.routes.get_settings", lambda: settings)

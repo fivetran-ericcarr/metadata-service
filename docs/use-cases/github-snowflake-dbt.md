@@ -238,6 +238,32 @@ for FinServ / HCLS / MFG buyers and their auditors. All are live on this build.
   the gaps: **4 `missing_model_contract`** and **4 `unowned_object`** risks on the
   staging-only paths.
 
+## Reverse-ETL activation readiness (operational blast radius)
+
+Exposures answer "what dashboards break if this data is wrong?" A Fivetran
+**Activation** (reverse ETL) raises the stakes: it writes curated data *back* into
+an operational system of record (Salesforce, etc.). Pushing bad data into prod is
+worse than a stale dashboard — so the service adds an **activation readiness gate**.
+
+On a companion build (a retail Postgres source → dbt `customer_churn` mart → a
+Fivetran Activation into **Salesforce Contact**), the gate traverses dbt lineage
+*upstream* from the sync's source model and returns a verdict per sync:
+
+- The churn activation returns **`block`**. Its source model `customer_churn`
+  depends (via a `region_features` CTE) on `stg_retail__customers`, whose
+  `customer_id` uniqueness test is **`severity: warn`** and is *firing* — **143
+  duplicate rows**. A warn-severity test doesn't fail the dbt run, so a naive check
+  would happily sync; the gate's **warn-with-failures** rule catches exactly this
+  and blocks the push to a system of record.
+- The object feeding the sync raises an **`activates_bad_data`** (high) risk, and
+  `get_column_impact` maps the offending column all the way to the **Salesforce
+  destination field** it would have overwritten.
+- `list_activations(verdict="block")` and `get_activation_readiness(sync_id=…)`
+  give the agent the verdict plus the exact upstream reason.
+
+Verified live: `get_activation_readiness` on the churn sync returns
+`verdict: block`, `source_node: model.…customer_churn`, `warn_tests_with_failures: 1`.
+
 ## Example agent questions (on the demo data)
 
 How a Capgemini DQ agent answers real questions using the MCP tools over this exact
@@ -254,6 +280,7 @@ queries the warehouse.
 | **Which sensitive columns are exposed un-hashed?** | `get_dq_recommendations(recommendation_type=signal)` | `commit.author_email`, `commit.committer_email`, `user.email`, `user.phone`, `user_email.email` — review for masking. (Heuristic; `user.email_disabled` is an over-match.) |
 | **Is anything feeding the Repo Health dashboard at risk?** | `get_impact` / `list_warehouse_objects(failing_tests=true)` | The dashboard's inputs (issue, pull_request, repository) all pass tests and aren't stale — **healthy**. Any failure would raise `impacts_exposure`. |
 | **Which models violate governance?** | `get_dq_recommendations(risk=missing_model_contract)` / `unowned_object` | The four staging-only paths (e.g. `label`, `pull_request_review`) — no enforced contract, no owner. The mart path is contracted, public, and owned. |
+| **Is it safe to sync churn scores back to Salesforce?** | `get_activation_readiness(label="customer_churn …")` | **No — `block`.** The activation's source model depends on `stg_retail__customers`, whose warn-severity uniqueness test is firing on **143 duplicate rows**; pushing would overwrite Salesforce Contacts with unvalidated data. Fix the duplicates upstream, then re-check. |
 
 ## Lessons learned (real findings from this build)
 
@@ -275,6 +302,12 @@ queries the warehouse.
    on `application/json`.
 6. **Scope dbt extraction by project** (`--dbt-project-id`) — account 3643 has
    240+ projects; an unscoped run grabs unrelated artifacts.
+7. **Warn-severity tests are the reverse-ETL trap.** A `severity: warn` test with
+   failing rows leaves the dbt run green, so status-only checks pass it straight
+   through to prod. The activation gate blocks on warn-with-failures for exactly
+   this reason. Scope Activations extraction with `WAREHOUSE_DATABASE` — a shared
+   Census workspace returned 25 syncs, 24 of them reading sources outside this
+   project (correctly reported as `unknown`, no lineage to assess).
 
 <a name="fivetran-metadata"></a>
 See the project root [README](../../README.md) for the full service docs and

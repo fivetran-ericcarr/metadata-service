@@ -91,6 +91,7 @@ The primary artifact. Top-level shape:
   "warehouse_objects": [ ... ],
   "dq_recommendations": [ ... ],
   "metric_quality": [ ... ],
+  "activations": { ... },
   "schema_drift": [ ... ],
   "errors": [ ... ]
 }
@@ -105,6 +106,7 @@ The primary artifact. Top-level shape:
 | `warehouse_objects` | array | Joined Fivetran + dbt objects (section 2.3) |
 | `dq_recommendations` | array | DQ recommendations / risks / signals (section 2.4) |
 | `metric_quality` | array | Per-metric Semantic Layer trust rollup (`{metric, trust_level, upstream_objects, failing_tests}`) |
+| `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
 
@@ -388,15 +390,62 @@ plus whatever context is available (`source`, `connection_id`, `schema`,
 `table`, `run_id`, `artifact`, `unique_id`). The pipeline never silently
 swallows errors and never logs credentials.
 
+### 2.7 `activations`
+
+Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
+"is it safe to push this data back to a system of record?" gate. Populated when
+`ACTIVATIONS_API_TOKEN` is set (scoped to `WAREHOUSE_DATABASE`); otherwise
+`{ "syncs": [], "summary": {"total": 0, "by_verdict": {}} }`.
+
+```json
+{
+  "extracted_at": "2026-06-30T00:00:00Z",
+  "summary": { "total": 1, "by_verdict": { "block": 1 } },
+  "syncs": [
+    {
+      "sync_id": 3580269,
+      "label": "customer_churn -> Salesforce Contact (DQ demo)",
+      "paused": true,
+      "source_object": { "table_catalog": "ERICC_TEST_DB", "table_schema": "DBT_ERICC_MARTS", "table_name": "CUSTOMER_CHURN" },
+      "destination_name": "sf_dq_activations_ericc",
+      "destination_type": "salesforce",
+      "destination_object": "Contact",
+      "mappings": [ { "source_column": "EMAIL", "destination_field": "Email", "is_primary_identifier": true } ],
+      "readiness": {
+        "verdict": "block",
+        "source_node_unique_id": "model.github_dq.customer_churn",
+        "reasons": [ { "code": "upstream_warn_test_failures", "severity": "high", "message": "…" } ],
+        "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
+      }
+    }
+  ]
+}
+```
+
+| `readiness.verdict` | Meaning |
+|---|---|
+| `allow` | No failing tests, stale syncs, or governance gaps upstream. |
+| `warn` | Source model has no enforced contract, or an upstream source is unmatched. |
+| `block` | Upstream failing test, a **warn-severity test with failures > 0**, failing source freshness, or a stale upstream Fivetran sync — do not push. |
+| `unknown` | Sync source object is not matched to a dbt model/source (no lineage to assess). |
+
+Each warehouse object the sync consumes also carries a compact
+`warehouse_objects[].activations[]` back-reference (`sync_id`, `label`,
+`destination_name`, `destination_object`, `readiness_verdict`), and objects
+feeding a `block`/`warn` sync raise an `activates_bad_data` risk in
+`dq_recommendations`.
+
 ---
 
 ## Consuming the artifacts
 
 - **File**: read `metadata_snapshots/latest.json` directly.
 - **REST**: `GET /metadata/latest`, `GET /metadata/warehouse-objects`,
-  `GET /dq/recommendations`, `GET /dq/drift`.
+  `GET /dq/recommendations`, `GET /dq/drift`, `GET /metadata/activations`,
+  `GET /dq/activation-readiness`.
 - **MCP**: `get_latest_metadata`, `get_warehouse_object`,
-  `get_dq_recommendations`, `get_schema_drift`.
+  `get_dq_recommendations`, `get_schema_drift`, `list_activations`,
+  `get_activation_readiness`.
 
 The full Pydantic contract lives in
 [`models/normalized.py`](src/metadata_service/models/normalized.py).

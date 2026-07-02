@@ -31,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the locked Python 3.11 environment.
 
 ### Added
+- **Fivetran Activations (reverse ETL) readiness gate** — ingests Activations
+  (Census-based) syncs via a new `ActivationsClient`/`ActivationsExtractor`/
+  `ActivationsNormalizer` (`ACTIVATIONS_API_TOKEN`, scoped to `WAREHOUSE_DATABASE`).
+  A new `dq/activation_gate.py` traverses dbt lineage *upstream* from each sync's
+  source model and returns a verdict per sync: **allow | warn | block | unknown**.
+  Policy: **block** on any upstream failing test, a warn-severity test with
+  failures > 0 (a soft test actually firing on data headed to prod), failing source
+  freshness, or a stale upstream Fivetran sync; **warn** on a source model with no
+  enforced contract or an unmatched upstream source; **allow** otherwise. Syncs land
+  in a top-level `activations` block (with per-sync `readiness` + a verdict rollup),
+  are attached to the warehouse objects they consume (`warehouse_objects[].activations`),
+  and raise an `activates_bad_data` risk (high when blocking). `get_impact` now
+  includes activations; `get_column_impact` maps an affected column to the
+  destination fields it feeds; `get_dq_summary` reports the verdict rollup. New MCP
+  tools `list_activations` / `get_activation_readiness`, REST `/metadata/activations`
+  + `/dq/activation-readiness`, and CLI `activations extract` + `build
+  --no-activations`. **Verified live**: the churn→Salesforce Contact sync returns
+  `block` — matched to `model.…customer_churn`, upstream warn-severity uniqueness
+  test firing (143 duplicate rows) on data headed to a system of record.
 - `examples/agent_transcript.md` — a read-through DQ-agent chat (tool calls +
   answers) over the demo data.
 - `.github/workflows/refresh.yml` — scheduled (daily) + on-demand snapshot refresh

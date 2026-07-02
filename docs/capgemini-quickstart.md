@@ -88,6 +88,7 @@ sequenceDiagram
 | `get_impact(schema, table)` | Blast radius — downstream models + exposures |
 | `get_column_impact(schema, table, column)` | Column-level blast radius — downstream columns + metrics + exposures |
 | `list_metrics()` / `get_metric_quality(metric)` | Governed metrics with a trust level |
+| `list_activations(verdict)` / `get_activation_readiness(sync_id, label)` | Reverse-ETL readiness — is it safe to push this data back to prod? |
 | `get_dq_recommendations(schema, table, recommendation_type, confidence, risk, limit)` | Per-object or cross-snapshot recommendations |
 | `get_schema_drift(schema, table, severity)` | Changes since the previous snapshot |
 | `get_latest_metadata(scope)` | Full snapshot (large — prefer the above) |
@@ -105,8 +106,9 @@ sequenceDiagram
 | What dbt tests should we add? | `get_dq_recommendations` (confidence-ranked) |
 | Which columns are primary keys / hashed / sensitive? | `columns[].is_primary_key`, `hashed`, `potential_pii` signal |
 | Did the schema drift since last run? | `get_schema_drift` |
-| If this table/column is wrong, what breaks downstream? | `get_impact` / `get_column_impact` (models, exposures, metrics) |
+| If this table/column is wrong, what breaks downstream? | `get_impact` / `get_column_impact` (models, exposures, metrics, activation fields) |
 | Can we trust metric X? | `get_metric_quality` (trust level from upstream DQ) |
+| Is it safe to push this data back to prod (reverse ETL)? | `get_activation_readiness` (allow/warn/block from upstream DQ) |
 | Which models lack a contract or an owner? | `missing_model_contract` / `unowned_object` risks |
 
 ## 4. 5-minute quickstart
