@@ -7,10 +7,11 @@ from pathlib import Path
 
 import typer
 
-from .clients import DbtClient, FivetranClient
+from .clients import ActivationsClient, DbtClient, FivetranClient
 from .config import get_settings
 from .dq.drift import detect_drift
 from .extractors import DbtExtractor, FivetranExtractor
+from .extractors.activations_extractor import ActivationsExtractor
 from .logging_config import configure_logging
 from .pipeline import build_and_store
 from .storage.base import get_storage
@@ -18,8 +19,10 @@ from .storage.base import get_storage
 app = typer.Typer(help="Fivetran + dbt Platform metadata service.", no_args_is_help=True)
 fivetran_app = typer.Typer(help="Fivetran extraction commands.")
 dbt_app = typer.Typer(help="dbt extraction commands.")
+activations_app = typer.Typer(help="Fivetran Activations (reverse ETL) extraction commands.")
 app.add_typer(fivetran_app, name="fivetran")
 app.add_typer(dbt_app, name="dbt")
+app.add_typer(activations_app, name="activations")
 
 
 @app.callback()
@@ -71,6 +74,27 @@ def dbt_extract(
     _write_json(out, raw)
 
 
+@activations_app.command("extract")
+def activations_extract(
+    source_database: str | None = typer.Option(
+        None, "--source-database",
+        help="Scope to syncs whose source reads this warehouse database "
+             "(defaults to WAREHOUSE_DATABASE).",
+    ),
+    out: str = typer.Option("activations_raw_latest.json", "--out"),
+) -> None:
+    """Pull raw Activations (reverse ETL) syncs and write activations_raw_latest.json."""
+    settings = get_settings()
+    if not settings.activations_enabled():
+        typer.echo("ACTIVATIONS_API_TOKEN is not set; nothing to extract.")
+        raise typer.Exit(code=1)
+    with ActivationsClient(settings) as client:
+        raw = ActivationsExtractor(client).extract(
+            source_database=source_database or settings.warehouse_database
+        )
+    _write_json(out, raw)
+
+
 @app.command()
 def build(
     group_id: str | None = typer.Option(None, "--group-id", help="Fivetran group id."),
@@ -79,6 +103,10 @@ def build(
     ),
     include_fivetran: bool = typer.Option(True, "--include-fivetran/--no-fivetran"),
     include_dbt: bool = typer.Option(True, "--include-dbt/--no-dbt"),
+    include_activations: bool = typer.Option(
+        True, "--include-activations/--no-activations",
+        help="Include Fivetran Activations (reverse ETL) readiness when ACTIVATIONS_API_TOKEN is set.",
+    ),
     connected_only: bool = typer.Option(
         False, "--connected-only", help="Skip connections whose setup is not 'connected' (broken/incomplete)."
     ),
@@ -107,6 +135,7 @@ def build(
         group_id=group_id,
         include_fivetran=include_fivetran,
         include_dbt=include_dbt,
+        include_activations=include_activations,
         fixtures_dir=fixtures_dir,
         connected_only=connected_only,
         skip_paused=skip_paused,

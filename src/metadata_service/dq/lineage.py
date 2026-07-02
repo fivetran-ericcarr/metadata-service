@@ -26,8 +26,16 @@ class LineageGraph:
 
     def descendants(self, uid: str) -> list[str]:
         """All downstream nodes reachable from ``uid`` (BFS, excludes uid)."""
+        return self._reach(uid, self._children)
+
+    def ancestors(self, uid: str) -> list[str]:
+        """All upstream nodes ``uid`` depends on (BFS, excludes uid)."""
+        return self._reach(uid, self._parents)
+
+    @staticmethod
+    def _reach(uid: str, adjacency: dict[str, list[str]]) -> list[str]:
         seen: set[str] = set()
-        queue = list(self._children.get(uid, []))
+        queue = list(adjacency.get(uid, []))
         order: list[str] = []
         while queue:
             node = queue.pop(0)
@@ -35,5 +43,5 @@ class LineageGraph:
                 continue
             seen.add(node)
             order.append(node)
-            queue.extend(self._children.get(node, []))
+            queue.extend(adjacency.get(node, []))
         return order

@@ -271,6 +271,35 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
     return recs
 
 
+def activation_risk(obj: dict, activations: list[dict]) -> dict | None:
+    """Risk when a warehouse object feeds a reverse-ETL activation that the gate
+    is *not* clearing. Bad data pushed back to an operational system corrupts a
+    system of record, so this is the highest-consequence blast radius we track.
+    """
+    blocking = [a for a in activations if a.get("readiness_verdict") in ("block", "warn")]
+    if not blocking:
+        return None
+    worst = "block" if any(a.get("readiness_verdict") == "block" for a in blocking) else "warn"
+    return {
+        "object_id": obj.get("object_id"),
+        "recommendation_type": "risk",
+        "risk": "activates_bad_data",
+        "severity": "high" if worst == "block" else "medium",
+        "reason": ("This object feeds a reverse-ETL activation the readiness gate is blocking; "
+                   "syncing would push unvalidated data into an operational system."
+                   if worst == "block" else
+                   "This object feeds a reverse-ETL activation with unresolved governance gaps."),
+        "target": {"schema": obj.get("schema"), "table": obj.get("name")},
+        "details": {"activations": [
+            {"sync_id": a.get("sync_id"), "label": a.get("label"),
+             "destination_name": a.get("destination_name"),
+             "destination_object": a.get("destination_object"),
+             "verdict": a.get("readiness_verdict")}
+            for a in blocking
+        ]},
+    }
+
+
 # -- helpers --------------------------------------------------------------
 def _dbt_test(object_id, test_name, target, confidence, reason) -> dict:
     return {

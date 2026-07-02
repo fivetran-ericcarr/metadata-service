@@ -89,6 +89,21 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
         """Trust detail for one governed metric: upstream objects + failing tests."""
         return tools.get_metric_quality(metric)
 
+    # --- Activations (reverse ETL) ----------------------------------------
+    @server.tool()
+    def list_activations(verdict: str | None = None) -> dict:
+        """Reverse-ETL activations with a readiness verdict (allow|warn|block|
+        unknown): what data is being pushed back to operational systems, and is
+        any of it unsafe? Filter by verdict."""
+        return tools.list_activations(verdict)
+
+    @server.tool()
+    def get_activation_readiness(sync_id: str | None = None, label: str | None = None) -> dict:
+        """Readiness detail for one activation: verdict + upstream reasons
+        (failing/warn tests, staleness, missing contract) + destination field
+        mappings. 'Is it safe to push this data back to prod?'"""
+        return tools.get_activation_readiness(sync_id, label)
+
     @server.tool()
     def get_dq_recommendations(
         schema: str | None = None,

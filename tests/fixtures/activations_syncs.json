@@ -1,0 +1,26 @@
+{
+  "extracted_at": "2026-06-30T00:00:00Z",
+  "source": "activations",
+  "syncs": [
+    {
+      "id": 900,
+      "label": "dim_account -> Salesforce Account",
+      "status": "Ready",
+      "paused": true,
+      "operation": "upsert",
+      "source_attributes": {
+        "connection_id": "wh1",
+        "object": {"table_catalog": "DEMO_DB", "table_schema": "marts", "table_name": "dim_account"}
+      },
+      "destination_attributes": {"connection_id": "sf1", "object": "Account"},
+      "mappings": [
+        {"from": {"type": "column", "data": "account_id"}, "to": "Id", "is_primary_identifier": true},
+        {"from": {"type": "column", "data": "account_name"}, "to": "Name", "is_primary_identifier": false},
+        {"from": {"type": "column", "data": "account_status"}, "to": "Type", "is_primary_identifier": false}
+      ],
+      "updated_at": "2026-06-30T00:00:00Z"
+    }
+  ],
+  "sources": {"wh1": {"name": "snowflake_demo", "type": "snowflake"}},
+  "destinations": {"sf1": {"name": "salesforce_prod", "type": "salesforce"}}
+}
