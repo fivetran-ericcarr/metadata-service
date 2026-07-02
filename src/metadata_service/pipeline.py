@@ -11,10 +11,16 @@ import json
 import logging
 from pathlib import Path
 
-from .clients import DbtClient, FivetranClient
+from .clients import ActivationsClient, DbtClient, FivetranClient
 from .config import Settings
 from .extractors import DbtExtractor, FivetranExtractor
-from .normalizers import CombinedNormalizer, DbtNormalizer, FivetranNormalizer
+from .extractors.activations_extractor import ActivationsExtractor
+from .normalizers import (
+    ActivationsNormalizer,
+    CombinedNormalizer,
+    DbtNormalizer,
+    FivetranNormalizer,
+)
 from .storage.base import get_storage
 
 logger = logging.getLogger(__name__)
@@ -26,6 +32,7 @@ def build_metadata(
     group_id: str | None = None,
     include_fivetran: bool = True,
     include_dbt: bool = True,
+    include_activations: bool = True,
     fixtures_dir: str | None = None,
     aliases: dict | None = None,
     connected_only: bool = False,
@@ -36,7 +43,7 @@ def build_metadata(
 ) -> dict:
     """Run extraction + normalization and return the normalized document."""
     if fixtures_dir:
-        fivetran_raw, dbt_raw = _load_fixture_payloads(Path(fixtures_dir))
+        fivetran_raw, dbt_raw, activations_raw = _load_fixture_payloads(Path(fixtures_dir))
     else:
         fivetran_raw = (
             _extract_fivetran(settings, group_id, connected_only=connected_only, skip_paused=skip_paused)
@@ -48,12 +55,18 @@ def build_metadata(
             if include_dbt
             else _empty_dbt()
         )
+        activations_raw = (
+            _extract_activations(settings)
+            if include_activations and settings.activations_enabled()
+            else _empty_activations()
+        )
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
     if enrich_warehouse and not fixtures_dir and include_fivetran:
         _enrich_primary_keys(settings, fivetran_norm)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
-    doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm)
+    activations_norm = ActivationsNormalizer().normalize(activations_raw)
+    doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm, activations_norm)
     logger.info(
         "Built metadata: %s warehouse objects, %s recommendations, %s errors",
         len(doc.get("warehouse_objects", [])),
@@ -69,6 +82,7 @@ def build_and_store(
     group_id: str | None = None,
     include_fivetran: bool = True,
     include_dbt: bool = True,
+    include_activations: bool = True,
     fixtures_dir: str | None = None,
     aliases: dict | None = None,
     connected_only: bool = False,
@@ -90,6 +104,7 @@ def build_and_store(
         group_id=group_id,
         include_fivetran=include_fivetran,
         include_dbt=include_dbt,
+        include_activations=include_activations,
         fixtures_dir=fixtures_dir,
         aliases=aliases,
         connected_only=connected_only,
@@ -148,6 +163,11 @@ def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> None:
             pass
 
 
+def _extract_activations(settings: Settings) -> dict:
+    with ActivationsClient(settings) as client:
+        return ActivationsExtractor(client).extract(source_database=settings.warehouse_database)
+
+
 def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: int | None = None) -> dict:
     settings.require_dbt()
     with DbtClient(settings) as client:
@@ -164,6 +184,11 @@ def _empty_dbt() -> dict:
     return {"extracted_at": None, "source": "dbt", "artifacts": {}, "errors": []}
 
 
+def _empty_activations() -> dict:
+    return {"extracted_at": None, "source": "activations", "syncs": [],
+            "sources": {}, "destinations": {}, "errors": []}
+
+
 # -- fixtures mode --------------------------------------------------------
 def _load_json(path: Path) -> dict:
     if not path.exists():
@@ -171,8 +196,8 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict]:
-    """Assemble raw Fivetran + dbt payloads from fixture files (offline build)."""
+def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict, dict]:
+    """Assemble raw Fivetran + dbt + activations payloads from fixture files (offline build)."""
     connections_fix = _load_json(fixtures / "fivetran_connections.json")
     schema_fix = _load_json(fixtures / "fivetran_schema_config.json")
     columns_fix = _load_json(fixtures / "fivetran_columns.json")
@@ -211,4 +236,7 @@ def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict]:
         },
         "errors": [],
     }
-    return fivetran_raw, dbt_raw
+
+    activations_fix = _load_json(fixtures / "activations_syncs.json")
+    activations_raw = activations_fix or _empty_activations()
+    return fivetran_raw, dbt_raw, activations_raw

@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 
 from ..config import Settings
+from ..dq.activation_gate import evaluate_syncs
 from ..dq.lineage import LineageGraph
-from ..dq.recommendations import recommend_for_object
+from ..dq.recommendations import activation_risk, recommend_for_object
 from ..models.common import (
     MATCH_CASE_INSENSITIVE,
     MATCH_CONFIGURED_ALIAS,
@@ -32,9 +33,11 @@ class CombinedNormalizer:
         # aliases: {"dest_schema.dest_table": "dbt_schema.dbt_table"}
         self._aliases = {k.lower(): v.lower() for k, v in (aliases or {}).items()}
 
-    def build(self, fivetran_normalized: dict, dbt_normalized: dict) -> dict:
+    def build(self, fivetran_normalized: dict, dbt_normalized: dict,
+              activations_normalized: dict | None = None) -> dict:
         fivetran_normalized = fivetran_normalized or {}
         dbt_normalized = dbt_normalized or {}
+        activations_normalized = activations_normalized or {}
 
         models = dbt_normalized.get("models") or []
         sources = dbt_normalized.get("sources") or []
@@ -65,7 +68,14 @@ class CombinedNormalizer:
 
         metric_quality = self._build_metric_quality(metrics, warehouse_objects)
 
-        errors = list(fivetran_normalized.get("errors") or []) + list(dbt_normalized.get("errors") or [])
+        activations = self._build_activations(
+            activations_normalized, models, sources, lineage,
+            warehouse_objects, all_recommendations,
+        )
+
+        errors = (list(fivetran_normalized.get("errors") or [])
+                  + list(dbt_normalized.get("errors") or [])
+                  + list(activations_normalized.get("errors") or []))
 
         return {
             "generated_at": utcnow_iso(),
@@ -94,8 +104,79 @@ class CombinedNormalizer:
             "warehouse_objects": warehouse_objects,
             "dq_recommendations": all_recommendations,
             "metric_quality": metric_quality,
+            "activations": activations,
             "schema_drift": [],
             "errors": errors,
+        }
+
+    # -- activations (reverse ETL) ----------------------------------------
+    def _build_activations(self, activations_normalized, models, sources, lineage,
+                           warehouse_objects, all_recommendations) -> dict:
+        syncs_in = activations_normalized.get("syncs") or []
+        if not syncs_in:
+            return {
+                "extracted_at": activations_normalized.get("extracted_at"),
+                "syncs": [],
+                "summary": {"total": 0, "by_verdict": {}},
+            }
+
+        stale_ids = {r.get("object_id") for r in all_recommendations
+                     if r.get("risk") == "stale_fivetran_sync"}
+        evaluated = evaluate_syncs(
+            syncs_in, models=models, sources=sources, lineage=lineage,
+            warehouse_objects=warehouse_objects, stale_object_ids=stale_ids,
+        )
+
+        objects_by_id = {o.get("object_id"): o for o in warehouse_objects}
+        # object_id -> list of activation refs that feed it
+        feeds: dict[str, list[dict]] = {}
+
+        for sync in evaluated:
+            readiness = sync.get("readiness") or {}
+            source_node = readiness.get("source_node_unique_id")
+            ref = {
+                "sync_id": sync.get("sync_id"),
+                "label": sync.get("label"),
+                "destination_name": sync.get("destination_name"),
+                "destination_type": sync.get("destination_type"),
+                "destination_object": sync.get("destination_object"),
+                "paused": sync.get("paused"),
+                "readiness_verdict": readiness.get("verdict"),
+            }
+            if not source_node:
+                continue
+            upstream = {source_node} | set(lineage.ancestors(source_node))
+            for obj in warehouse_objects:
+                dbt = obj.get("dbt") or {}
+                owned = set(dbt.get("model_unique_ids") or [])
+                if dbt.get("source_unique_id"):
+                    owned.add(dbt["source_unique_id"])
+                if owned & upstream:
+                    feeds.setdefault(obj.get("object_id"), []).append(ref)
+
+        # attach to objects + append activates_bad_data risk + refresh summary
+        for object_id, refs in feeds.items():
+            obj = objects_by_id.get(object_id)
+            if obj is None:
+                continue
+            obj["activations"] = refs
+            risk = activation_risk(obj, refs)
+            if risk is not None:
+                all_recommendations.append(risk)
+                if risk["severity"] == "high":
+                    obj.setdefault("dq_summary", {})["risk_level"] = "high"
+                elif obj.get("dq_summary", {}).get("risk_level") == "low":
+                    obj["dq_summary"]["risk_level"] = "medium"
+
+        by_verdict: dict[str, int] = {}
+        for sync in evaluated:
+            v = (sync.get("readiness") or {}).get("verdict", "unknown")
+            by_verdict[v] = by_verdict.get(v, 0) + 1
+
+        return {
+            "extracted_at": activations_normalized.get("extracted_at"),
+            "syncs": evaluated,
+            "summary": {"total": len(evaluated), "by_verdict": by_verdict},
         }
 
     # -- per-object -------------------------------------------------------

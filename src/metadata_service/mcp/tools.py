@@ -163,8 +163,9 @@ def list_warehouse_objects(
 
 
 def get_impact(schema: str, table: str, settings: Settings | None = None) -> dict:
-    """Blast radius for an object: downstream dbt models and the exposures
-    (dashboards/ML/apps) that depend on it. Answers 'what breaks if this is wrong?'."""
+    """Blast radius for an object: downstream dbt models, the exposures
+    (dashboards/ML/apps) that depend on it, and any reverse-ETL activations it
+    feeds into operational systems. Answers 'what breaks if this is wrong?'."""
     settings = settings or get_settings()
     obj = get_warehouse_object(schema, table, settings=settings)
     if not obj.get("name"):
@@ -176,6 +177,7 @@ def get_impact(schema: str, table: str, settings: Settings | None = None) -> dic
         "name": obj.get("name"),
         "downstream_models": dbt.get("model_unique_ids", []),
         "exposures": dbt.get("exposures", []),
+        "activations": obj.get("activations", []),
         "has_failing_tests": (obj.get("dq_summary", {}) or {}).get("failing_tests_count", 0) > 0,
     }
 
@@ -204,6 +206,27 @@ def get_column_impact(schema: str, table: str, column: str, settings: Settings |
                if set(m.get("model_unique_ids") or []) & set(affected_models)]
     exposures = [e for e in doc.get("sources", {}).get("dbt", {}).get("exposures", [])
                  if set(e.get("depends_on") or []) & set(affected_models)]
+
+    # reverse-ETL destination fields fed by an affected column of an activation's source model
+    affected_cols_by_model: dict[str, set] = {}
+    for a in affected:
+        affected_cols_by_model.setdefault(a["unique_id"], set()).add((a.get("column") or "").lower())
+    activation_fields: list[dict] = []
+    for sync in doc.get("activations", {}).get("syncs", []):
+        src_node = (sync.get("readiness") or {}).get("source_node_unique_id")
+        cols = affected_cols_by_model.get(src_node)
+        if not cols:
+            continue
+        for m in sync.get("mappings") or []:
+            if (m.get("source_column") or "").lower() in cols:
+                activation_fields.append({
+                    "sync_id": sync.get("sync_id"),
+                    "destination_name": sync.get("destination_name"),
+                    "destination_object": sync.get("destination_object"),
+                    "destination_field": m.get("destination_field"),
+                    "source_column": m.get("source_column"),
+                    "readiness_verdict": (sync.get("readiness") or {}).get("verdict"),
+                })
     return {
         "object_id": obj.get("object_id"),
         "column": column,
@@ -211,6 +234,7 @@ def get_column_impact(schema: str, table: str, column: str, settings: Settings |
         "affected_model_count": len(affected_models),
         "metrics": [{"name": m.get("name"), "type": m.get("type")} for m in metrics],
         "exposures": [{"name": e.get("name"), "type": e.get("type")} for e in exposures],
+        "activation_fields": activation_fields,
     }
 
 
@@ -233,6 +257,50 @@ def get_metric_quality(metric: str, settings: Settings | None = None) -> dict:
         if (m.get("metric") or "").lower() == metric.lower():
             return m
     return {"found": False, "message": f"No metric named {metric!r}."}
+
+
+def list_activations(
+    verdict: str | None = None,
+    settings: Settings | None = None,
+) -> dict:
+    """Reverse-ETL activations with their readiness verdict (allow|warn|block|
+    unknown). Answers 'what data are we pushing back into operational systems,
+    and is any of it unsafe?'. Filter by ``verdict``."""
+    settings = settings or get_settings()
+    doc = _latest(settings)
+    syncs = doc.get("activations", {}).get("syncs", [])
+    rows = []
+    for s in syncs:
+        r = s.get("readiness") or {}
+        if verdict and r.get("verdict") != verdict:
+            continue
+        rows.append({
+            "sync_id": s.get("sync_id"),
+            "label": s.get("label"),
+            "paused": s.get("paused"),
+            "source_object": s.get("source_object"),
+            "destination_name": s.get("destination_name"),
+            "destination_type": s.get("destination_type"),
+            "destination_object": s.get("destination_object"),
+            "verdict": r.get("verdict"),
+        })
+    return {"count": len(rows), "summary": doc.get("activations", {}).get("summary", {}),
+            "activations": rows}
+
+
+def get_activation_readiness(sync_id: str | int | None = None, label: str | None = None,
+                             settings: Settings | None = None) -> dict:
+    """Full readiness detail for one activation: verdict + the upstream reasons
+    (failing tests, warn-severity failures, staleness, missing contract) and the
+    field mappings pushed to the destination. 'Is it safe to sync this to prod?'"""
+    settings = settings or get_settings()
+    syncs = _latest(settings).get("activations", {}).get("syncs", [])
+    for s in syncs:
+        if sync_id is not None and str(s.get("sync_id")) == str(sync_id):
+            return s
+        if label and (s.get("label") or "").lower() == label.lower():
+            return s
+    return {"found": False, "message": f"No activation for sync_id={sync_id!r} label={label!r}."}
 
 
 def get_dq_summary(settings: Settings | None = None) -> dict:
@@ -283,6 +351,10 @@ def get_dq_summary(settings: Settings | None = None) -> dict:
             "by_risk": tally(recs, "risk"),
         },
         "drift": {"total": len(drift), "by_severity": tally(drift, "severity")},
+        "activations": {
+            "total": doc.get("activations", {}).get("summary", {}).get("total", 0),
+            "by_verdict": doc.get("activations", {}).get("summary", {}).get("by_verdict", {}),
+        },
     }
 
 

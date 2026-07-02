@@ -9,10 +9,15 @@ metadata pipeline plus optional REST and MCP interfaces.
 > — what it does, how agents use it, and where it fits — then the runnable
 > **[examples/](examples/)** (agent client, REST, offline demo).
 >
-> **Live reference build:** [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
-> walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
-> (110 warehouse objects, 7 joined to dbt, 455 recommendations) — with exposures /
-> blast radius, Semantic Layer metric trust, column-level lineage, and dbt governance.
+> **Live reference builds:**
+> - [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
+>   walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
+>   (110 warehouse objects, 7 joined to dbt, 455 recommendations) — with exposures /
+>   blast radius, Semantic Layer metric trust, column-level lineage, and dbt governance.
+> - [docs/use-cases/reverse-etl-churn-salesforce.md](docs/use-cases/reverse-etl-churn-salesforce.md)
+>   walks the **reverse-ETL activation readiness gate** — a retail churn model synced
+>   back to Salesforce is **blocked** because a `severity: warn` test is firing on 143
+>   duplicate rows headed to prod.
 
 ## 1. Project Purpose
 
@@ -30,11 +35,14 @@ a DQ agent answer questions like:
   dashboards break? (column-level lineage + blast radius)
 - Can we trust a given governed Semantic Layer metric?
 - Which modeled objects lack an enforced contract or an owner?
+- Is it **safe to push this data back to prod** via a reverse-ETL Activation, or
+  does something upstream (a failing/firing test, a stale sync) make it unsafe?
 
 Fivetran is the system of record for replicated source metadata; dbt Platform is
 the system of record for transformation/analytics metadata. This service joins
 the two into `warehouse_objects`, then layers on DQ recommendations, drift,
-business-impact (exposures), metric trust, column-level lineage, and governance.
+business-impact (exposures), metric trust, column-level lineage, governance, and
+a reverse-ETL **activation readiness gate**.
 
 ## 2. Architecture
 
@@ -124,7 +132,10 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `API_HOST` / `API_PORT` | FastAPI bind | `0.0.0.0` / `8080` |
 | `WAREHOUSE_TYPE` | Prefix for object ids (`warehouse://...`) | `warehouse` |
+| `WAREHOUSE_DATABASE` | Warehouse DB name (also scopes Activations to syncs reading it) | — |
 | `STALE_SYNC_THRESHOLD_HOURS` | Stale-sync risk threshold | `24` |
+| `ACTIVATIONS_API_TOKEN` | Fivetran Activations (Census) workspace token — enables the reverse-ETL readiness gate | — |
+| `ACTIVATIONS_BASE_URL` | Activations API base | `https://app.getcensus.com/api/v1` |
 
 Secrets are read from the environment only and are never logged.
 
@@ -133,8 +144,10 @@ Secrets are read from the environment only and are never logged.
 ```bash
 metadata-service fivetran extract --group-id <group>   # -> fivetran_raw_latest.json
 metadata-service dbt extract                            # -> dbt_raw_latest.json
+metadata-service activations extract                    # -> activations_raw_latest.json (reverse ETL)
 
 metadata-service build --group-id <group>               # full build -> latest.json snapshot
+metadata-service build --no-activations                 # skip the reverse-ETL readiness gate
 metadata-service build --fixtures-dir tests/fixtures    # OFFLINE build from fixtures (no creds)
 
 # Connection filters (apply to `fivetran extract` and `build`):
@@ -169,6 +182,8 @@ metadata-service serve-api
 | `GET /metadata/warehouse-objects/{object_id}` | Single object |
 | `GET /dq/recommendations?schema=&table=` | DQ recommendations |
 | `GET /dq/drift?severity=` | Drift records |
+| `GET /metadata/activations?verdict=` | Reverse-ETL syncs + readiness verdicts |
+| `GET /dq/activation-readiness?sync_id=&label=` | Readiness detail for one activation |
 
 `POST /metadata/refresh` body:
 
@@ -200,9 +215,10 @@ uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remo
 | `get_dq_summary()` | **Start here.** Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
 | `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). | ~0.3 KB/row |
 | `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, exposures, metrics, governance, dq_summary). | ~few KB |
-| `get_impact(schema, table)` | **Blast radius**: downstream dbt models + exposures (dashboards/ML/apps). | small |
-| `get_column_impact(schema, table, column)` | **Column-level** blast radius: downstream columns + affected metrics + exposures. | small |
+| `get_impact(schema, table)` | **Blast radius**: downstream dbt models, exposures (dashboards/ML/apps), and reverse-ETL activations. | small |
+| `get_column_impact(schema, table, column)` | **Column-level** blast radius: downstream columns, affected metrics/exposures, and the destination fields it feeds. | small |
 | `list_metrics()` / `get_metric_quality(metric)` | Governed Semantic Layer metrics with a **trust level** from upstream DQ posture. | small |
+| `list_activations(verdict)` / `get_activation_readiness(sync_id, label)` | Reverse-ETL syncs with a readiness **verdict** (allow\|warn\|block) — 'is it safe to push this data back to prod?' | small |
 | `get_dq_recommendations(schema, table, recommendation_type, confidence, risk, limit)` | Per-object **or** cross-snapshot recommendation filtering. | scales with filter |
 | `get_schema_drift(schema, table, severity)` | Drift records since the previous snapshot. | scales with filter |
 | `get_latest_metadata(scope)` | Full snapshot (large — prefer the tools above). | up to ~400 KB |

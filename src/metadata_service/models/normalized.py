@@ -48,5 +48,7 @@ class NormalizedMetadata(BaseModel):
     sources: MetadataSources = Field(default_factory=MetadataSources)
     warehouse_objects: list[dict] = []
     dq_recommendations: list[dict] = []
+    metric_quality: list[dict] = []
+    activations: dict = Field(default_factory=dict)
     schema_drift: list[dict] = []
     errors: list[dict] = []

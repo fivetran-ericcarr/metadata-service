@@ -53,6 +53,15 @@ class DbtRateLimitError(DbtError):
     """Rate limit retries exhausted (HTTP 429)."""
 
 
+# --- Activations (reverse ETL / Census) ----------------------------------
+class ActivationsError(MetadataServiceError):
+    """Base class for Fivetran Activations (Census) client errors."""
+
+
+class ActivationsAuthError(ActivationsError):
+    """Authentication failed (HTTP 401)."""
+
+
 # --- Pipeline -------------------------------------------------------------
 class StorageError(MetadataServiceError):
     """Storage backend read/write failure."""

@@ -108,3 +108,26 @@ def dq_drift(severity: str | None = Query(default=None)) -> dict:
     if severity:
         drift = [d for d in drift if d.get("severity") == severity]
     return {"count": len(drift), "drift": drift}
+
+
+@router.get("/metadata/activations")
+def metadata_activations(verdict: str | None = Query(default=None)) -> dict:
+    activations = _load_latest_or_404().get("activations", {})
+    syncs = activations.get("syncs", [])
+    if verdict:
+        syncs = [s for s in syncs if (s.get("readiness") or {}).get("verdict") == verdict]
+    return {"count": len(syncs), "summary": activations.get("summary", {}), "activations": syncs}
+
+
+@router.get("/dq/activation-readiness")
+def dq_activation_readiness(
+    sync_id: str | None = Query(default=None),
+    label: str | None = Query(default=None),
+) -> dict:
+    syncs = _load_latest_or_404().get("activations", {}).get("syncs", [])
+    for s in syncs:
+        if sync_id is not None and str(s.get("sync_id")) == str(sync_id):
+            return s
+        if label and (s.get("label") or "").lower() == label.lower():
+            return s
+    raise HTTPException(status_code=404, detail=f"No activation for sync_id={sync_id!r} label={label!r}.")

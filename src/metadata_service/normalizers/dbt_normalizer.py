@@ -284,6 +284,7 @@ class DbtNormalizer:
                     "attached_column": test.get("attached_column"),
                     "status": test.get("latest_status"),
                     "severity": test.get("severity"),
+                    "failures": test.get("failures"),
                 }
             )
 
