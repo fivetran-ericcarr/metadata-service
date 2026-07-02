@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     )
     warehouse_password: str | None = Field(default=None, alias="WAREHOUSE_PASSWORD")
 
+    # --- Fivetran Activations (reverse ETL / Census) ----------------------
+    activations_base_url: str = Field(
+        default="https://app.getcensus.com/api/v1", alias="ACTIVATIONS_BASE_URL"
+    )
+    activations_api_token: str | None = Field(default=None, alias="ACTIVATIONS_API_TOKEN")
+
+    def activations_enabled(self) -> bool:
+        return bool(self.activations_api_token)
+
     def warehouse_reader_enabled(self) -> bool:
         return bool(
             (self.warehouse_type or "").lower() == "snowflake"
