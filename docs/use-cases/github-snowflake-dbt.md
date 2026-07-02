@@ -263,6 +263,8 @@ Fivetran Activation into **Salesforce Contact**), the gate traverses dbt lineage
 
 Verified live: `get_activation_readiness` on the churn sync returns
 `verdict: block`, `source_node: model.…customer_churn`, `warn_tests_with_failures: 1`.
+The full reproducible walkthrough (components, mappings, live gate output, lessons)
+lives in [reverse-etl-churn-salesforce.md](./reverse-etl-churn-salesforce.md).
 
 ## Example agent questions (on the demo data)
 

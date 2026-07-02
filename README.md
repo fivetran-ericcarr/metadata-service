@@ -9,10 +9,15 @@ metadata pipeline plus optional REST and MCP interfaces.
 > — what it does, how agents use it, and where it fits — then the runnable
 > **[examples/](examples/)** (agent client, REST, offline demo).
 >
-> **Live reference build:** [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
-> walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
-> (110 warehouse objects, 7 joined to dbt, 455 recommendations) — with exposures /
-> blast radius, Semantic Layer metric trust, column-level lineage, and dbt governance.
+> **Live reference builds:**
+> - [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)
+>   walks a full GitHub → Fivetran → Snowflake → dbt → metadata-service end-to-end
+>   (110 warehouse objects, 7 joined to dbt, 455 recommendations) — with exposures /
+>   blast radius, Semantic Layer metric trust, column-level lineage, and dbt governance.
+> - [docs/use-cases/reverse-etl-churn-salesforce.md](docs/use-cases/reverse-etl-churn-salesforce.md)
+>   walks the **reverse-ETL activation readiness gate** — a retail churn model synced
+>   back to Salesforce is **blocked** because a `severity: warn` test is firing on 143
+>   duplicate rows headed to prod.
 
 ## 1. Project Purpose
 

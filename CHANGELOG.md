@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --no-activations`. **Verified live**: the churn→Salesforce Contact sync returns
   `block` — matched to `model.…customer_churn`, upstream warn-severity uniqueness
   test firing (143 duplicate rows) on data headed to a system of record.
+- `docs/use-cases/reverse-etl-churn-salesforce.md` — a reproducible walkthrough of
+  the activation readiness gate (retail Postgres → dbt `customer_churn` → Fivetran
+  Activation → Salesforce Contact) with the live `block` gate output, the upstream
+  warn-test table, agent Q&A, and lessons learned.
 - `examples/agent_transcript.md` — a read-through DQ-agent chat (tool calls +
   answers) over the demo data.
 - `.github/workflows/refresh.yml` — scheduled (daily) + on-demand snapshot refresh

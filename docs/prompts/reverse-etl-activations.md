@@ -1,5 +1,9 @@
 # Claude Code Build Prompt: Fivetran Activations (Reverse ETL) for the DQ Lifecycle
 
+> **Status: built & live-validated.** This prompt was executed on branch
+> `feat/activations-reverse-etl`. See the reproducible walkthrough in
+> [../use-cases/reverse-etl-churn-salesforce.md](../use-cases/reverse-etl-churn-salesforce.md).
+
 ```text
 You are Claude Code, a senior Python platform engineer, extending the existing
 `metadata-service` project (Fivetran + dbt metadata for agentic Data Quality).

@@ -195,4 +195,5 @@ source freshness. The full walkthrough is in
 - [README](../README.md) — full service docs, CLI, REST, MCP
 - [ARTIFACTS.md](../ARTIFACTS.md) — the JSON output contract, field by field
 - [Reference build](use-cases/github-snowflake-dbt.md) — the live end-to-end
+- [Reverse-ETL activation gate](use-cases/reverse-etl-churn-salesforce.md) — churn → Salesforce, blocked live
 - [examples/](../examples/) — runnable agent + REST + demo
