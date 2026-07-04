@@ -213,7 +213,7 @@ uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remo
 | Tool | Use | Typical size |
 |---|---|---|
 | `get_dq_summary()` | **Start here.** Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
-| `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). | ~0.3 KB/row |
+| `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, warn_test_failures, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). `warn_test_failures` finds warn-severity tests firing while the run stays green. | ~0.3 KB/row |
 | `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, exposures, metrics, governance, dq_summary). | ~few KB |
 | `get_impact(schema, table)` | **Blast radius**: downstream dbt models, exposures (dashboards/ML/apps), and reverse-ETL activations. | small |
 | `get_column_impact(schema, table, column)` | **Column-level** blast radius: downstream columns, affected metrics/exposures, and the destination fields it feeds. | small |

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Census pagination** — the Activations client fetched only page 1 of `/syncs`,
+  `/sources`, and `/destinations` (Census default `per_page=25`), silently
+  truncating the workspace. Verified live: 271 syncs existed, 25 were seen — 246
+  activations never received a readiness verdict. All list endpoints now walk
+  `pagination.next_page` (`per_page=100`, capped at 100 pages). The per-sync
+  detail call (N+1) was removed — Census list responses carry the full sync
+  payload — and the `max_syncs` cap now records a `Truncated` entry in `errors[]`
+  instead of dropping syncs silently.
+- **Activation gate now fails closed.** Absence of evidence no longer yields
+  `allow`: no upstream tests → `warn` (`no_upstream_tests`); tests defined but no
+  run results (missing/stale `run_results.json`) → `warn` (`no_test_results`);
+  Fivetran coverage data absent from the build (`--no-fivetran` or an errored
+  extract) → `warn` (`coverage_checks_skipped`) instead of silently disarming the
+  stale/unmatched checks. A warn-*status* test whose `failures` count is missing
+  now counts as firing (blocks). `readiness.upstream` gains `tests_seen` /
+  `tests_with_results`. An `unknown`-verdict sync with a named source object now
+  raises an `activates_unverified_data` (medium) risk — an activation pushing an
+  unmodeled table is a coverage blind spot, not a non-event.
+- **Warn-severity test failures are now triage-visible.** A firing warn test
+  (failing rows while the dbt run stays green) previously appeared *only* in the
+  activation gate: live, the 143-duplicate churn demo showed
+  `failing_tests_count: 0` everywhere. `dq_summary` gains
+  `warn_tests_with_failures_count` (risk floor: medium), `get_dq_summary` gains
+  `objects_with_warn_test_failures`, and `list_warehouse_objects` gains a
+  `warn_test_failures` filter. Fixtures corrected to real dbt shapes (a firing
+  warn-severity test has status `warn`, not `fail`; manifest severities are
+  uppercase `ERROR`/`WARN`) — the old fixture certified behavior the live system
+  didn't have.
+
 ### Added
 - `CHANGELOG.md` to track changes as they are made.
 - `ARTIFACTS.md` documenting every JSON artifact the service produces.

@@ -39,8 +39,12 @@ def test_dq_summary(built_doc):
     assert summary["has_primary_key"] is True
     assert summary["has_primary_key_tests"] is True
     assert summary["has_freshness_check"] is True
-    assert summary["failing_tests_count"] == 1  # accepted_values failed
-    assert summary["risk_level"] == "high"
+    # accepted_values is severity: warn and FIRING (status "warn", failures 3):
+    # the dbt run stays green, so it must NOT count as failing — but triage
+    # must still see it via warn_tests_with_failures_count.
+    assert summary["failing_tests_count"] == 0
+    assert summary["warn_tests_with_failures_count"] == 1
+    assert summary["risk_level"] == "high"  # stale Fivetran sync escalates it
 
 
 def test_unmatched_table_flagged(built_doc):

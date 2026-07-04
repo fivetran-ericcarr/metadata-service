@@ -111,7 +111,7 @@ metadata-service serve-mcp                              # or query the snapshot 
       { "code": "upstream_warn_test_failures", "severity": "high",
         "message": "1 upstream warn-severity test(s) have failing rows (soft test firing on data headed to prod)." }
     ],
-    "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1,
+    "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "tests_seen": 18, "tests_with_results": 18,
                   "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
   }
 }

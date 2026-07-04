@@ -48,9 +48,25 @@ def test_hashed_column_signal(built_doc):
     assert "Verify" in signals[0]["recommended_action"]
 
 
-def test_failing_tests_risk(built_doc):
+def test_warn_firing_test_does_not_raise_failing_risk(built_doc):
+    # accepted_values is warn-severity and firing: the run is green, so the
+    # failing_dbt_tests risk must NOT fire for it.
     account = object_by_table(built_doc, "salesforce", "account")
     recs = _recs_for(built_doc, account["object_id"])
+    assert not any(r.get("risk") == "failing_dbt_tests" for r in recs)
+
+
+def test_failing_tests_risk_fires_on_error_severity_failure():
+    obj = {
+        "object_id": "warehouse://unknown/s/t",
+        "schema": "s", "name": "t", "columns": [],
+        "match_confidence": "exact_schema_table",
+        "origin": {"enabled": True},
+        "dbt": {"source_unique_id": "source.p.s.t", "model_unique_ids": [],
+                "tests": [{"name": "not_null_t_id", "status": "fail",
+                            "severity": "ERROR", "failures": 12}]},
+    }
+    recs = recommend_for_object(obj)
     assert any(r.get("risk") == "failing_dbt_tests" and r["severity"] == "high" for r in recs)
 
 
