@@ -25,7 +25,8 @@ def test_get_dq_summary(seeded_settings):
     assert s["matched"] == 1            # salesforce.account
     assert s["unmatched"] == 1          # salesforce.contact
     assert s["objects_missing_dbt_coverage"] == 1
-    assert s["objects_with_failing_tests"] == 1   # account has a failing accepted_values test
+    assert s["objects_with_failing_tests"] == 0   # warn-firing is not "failing" (run is green)
+    assert s["objects_with_warn_test_failures"] == 1  # ...but triage still sees it
     assert s["recommendations"]["total"] > 0
     assert "missing_dbt_coverage" in s["recommendations"]["by_risk"]
 
@@ -42,9 +43,12 @@ def test_list_warehouse_objects_compact_and_filterable(seeded_settings):
     assert missing["objects"][0]["name"] == "contact"
     assert missing["objects"][0]["has_dbt_coverage"] is False
 
-    # failing_tests is a deterministic discriminator (account has a failing test).
+    # account's only bad test is warn-severity and firing: invisible to the
+    # failing_tests filter (run is green), visible to warn_test_failures.
     failing = tools.list_warehouse_objects(failing_tests=True, settings=seeded_settings)
-    assert [o["name"] for o in failing["objects"]] == ["account"]
+    assert failing["objects"] == []
+    warn = tools.list_warehouse_objects(warn_test_failures=True, settings=seeded_settings)
+    assert [o["name"] for o in warn["objects"]] == ["account"]
 
 
 def test_get_dq_recommendations_cross_object_filters(seeded_settings):

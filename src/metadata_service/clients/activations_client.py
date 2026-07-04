@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 60.0
 _MAX_RETRIES = 3
+_PER_PAGE = 100
+_MAX_PAGES = 100  # backstop against a pagination loop (10k records)
 
 
 class ActivationsClient:
@@ -52,11 +54,11 @@ class ActivationsClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _get(self, path: str) -> Any:
+    def _get(self, path: str, params: dict | None = None) -> Any:
         last: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
-                resp = self._client.get(path)
+                resp = self._client.get(path, params=params)
             except httpx.HTTPError as exc:
                 last = exc
                 self._sleep(attempt)
@@ -69,22 +71,50 @@ class ActivationsClient:
                 continue
             if resp.status_code >= 400:
                 raise ActivationsError(f"Activations {resp.status_code} for {path}: {resp.text[:200]}")
-            payload = resp.json()
-            # Census wraps list/detail results under "data".
-            return payload.get("data", payload) if isinstance(payload, dict) else payload
+            try:
+                return resp.json()
+            except ValueError as exc:
+                raise ActivationsError(f"Activations returned non-JSON for {path}.") from exc
         raise ActivationsError(f"Activations request failed after {self._max_retries} attempts: {path}") from last
 
+    def _list_paginated(self, path: str) -> list[dict]:
+        """Fetch every page of a Census list endpoint.
+
+        Census paginates all list endpoints (default per_page=25) and reports a
+        ``pagination`` block alongside ``data``. Fetching only page 1 silently
+        truncates the workspace, so we walk ``next_page`` to the end.
+        """
+        items: list[dict] = []
+        page: int | None = 1
+        for _ in range(_MAX_PAGES):
+            payload = self._get(path, params={"page": page, "per_page": _PER_PAGE})
+            if isinstance(payload, list):  # defensive: unwrapped list response
+                items.extend(d for d in payload if isinstance(d, dict))
+                return items
+            data = (payload or {}).get("data") or []
+            items.extend(d for d in data if isinstance(d, dict))
+            next_page = ((payload or {}).get("pagination") or {}).get("next_page")
+            if not next_page or not data:
+                return items
+            page = next_page
+        raise ActivationsError(
+            f"Activations pagination exceeded {_MAX_PAGES} pages for {path}; refusing to loop."
+        )
+
     def list_syncs(self) -> list[dict]:
-        data = self._get("/syncs")
-        return data if isinstance(data, list) else []
+        """All syncs in the workspace. Census returns the full sync payload
+        (source/destination attributes + mappings) in the list response."""
+        return self._list_paginated("/syncs")
 
     def get_sync(self, sync_id: int | str) -> dict:
-        return self._get(f"/syncs/{sync_id}") or {}
+        payload = self._get(f"/syncs/{sync_id}")
+        if isinstance(payload, dict):
+            data = payload.get("data", payload)
+            return data if isinstance(data, dict) else {}
+        return {}
 
     def list_sources(self) -> list[dict]:
-        data = self._get("/sources")
-        return data if isinstance(data, list) else []
+        return self._list_paginated("/sources")
 
     def list_destinations(self) -> list[dict]:
-        data = self._get("/destinations")
-        return data if isinstance(data, list) else []
+        return self._list_paginated("/destinations")

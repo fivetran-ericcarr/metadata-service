@@ -39,11 +39,13 @@ def test_tests_extracted_with_type_and_status(dbt_normalized):
     assert nn["attached_column"] == "id"
     assert nn["latest_status"] == "pass"
 
-    failing = tests["test.demo.accepted_values_stg_salesforce__account_status"]
-    assert failing["test_type"] == "accepted_values"
-    assert failing["latest_status"] == "fail"
-    assert failing["failures"] == 3
-    assert failing["severity"] == "warn"
+    # Real dbt: a firing warn-severity test has status "warn" (not "fail"),
+    # and manifests carry uppercase severities.
+    firing = tests["test.demo.accepted_values_stg_salesforce__account_status"]
+    assert firing["test_type"] == "accepted_values"
+    assert firing["latest_status"] == "warn"
+    assert firing["failures"] == 3
+    assert firing["severity"] == "WARN"
 
 
 def test_tests_attached_to_models(dbt_normalized):

@@ -41,26 +41,31 @@ class ActivationsExtractor:
 
         kept: list[dict] = []
         try:
-            summaries = self._client.list_syncs()
+            syncs = self._client.list_syncs()
         except ActivationsError as exc:
-            summaries = []
+            syncs = []
             errors.append({"source": "activations", "resource": "syncs",
                            "error_type": type(exc).__name__, "error_message": str(exc)})
 
+        # Census list responses carry the full sync payload (source/destination
+        # attributes + mappings), so no per-sync detail call is needed.
         wanted = (source_database or "").lower()
-        for sm in summaries[:max_syncs]:
-            sid = sm.get("id")
-            try:
-                detail = self._client.get_sync(sid)
-            except ActivationsError as exc:
-                errors.append({"source": "activations", "sync_id": sid,
-                               "error_type": type(exc).__name__, "error_message": str(exc)})
-                continue
+        for sync in syncs:
             if wanted:
-                obj = (detail.get("source_attributes") or {}).get("object") or {}
+                obj = (sync.get("source_attributes") or {}).get("object") or {}
                 if (obj.get("table_catalog") or "").lower() != wanted:
                     continue
-            kept.append(detail)
+            kept.append(sync)
+
+        if len(kept) > max_syncs:
+            errors.append({
+                "source": "activations", "resource": "syncs",
+                "error_type": "Truncated",
+                "error_message": f"{len(kept)} syncs matched but only {max_syncs} were kept "
+                                 f"(max_syncs); readiness was NOT evaluated for the rest.",
+            })
+            logger.warning("Activations truncated: %s matched, keeping %s", len(kept), max_syncs)
+            kept = kept[:max_syncs]
 
         logger.info("Activations extraction complete: %s syncs kept, %s errors", len(kept), len(errors))
         return {

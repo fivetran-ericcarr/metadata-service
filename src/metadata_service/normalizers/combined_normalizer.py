@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from ..config import Settings
-from ..dq.activation_gate import evaluate_syncs
+from ..dq.activation_gate import evaluate_syncs, is_warn_with_failures
 from ..dq.lineage import LineageGraph
 from ..dq.recommendations import activation_risk, recommend_for_object
 from ..models.common import (
@@ -167,6 +167,26 @@ class CombinedNormalizer:
                     obj.setdefault("dq_summary", {})["risk_level"] = "high"
                 elif obj.get("dq_summary", {}).get("risk_level") == "low":
                     obj["dq_summary"]["risk_level"] = "medium"
+
+        # An activation reading a named table we could NOT match to dbt is a
+        # coverage blind spot on data headed to prod — surface it, don't skip it.
+        for sync in evaluated:
+            readiness = sync.get("readiness") or {}
+            obj = sync.get("source_object") or {}
+            if readiness.get("verdict") == "unknown" and obj.get("table_name"):
+                all_recommendations.append({
+                    "object_id": None,
+                    "recommendation_type": "risk",
+                    "risk": "activates_unverified_data",
+                    "severity": "medium",
+                    "reason": "A reverse-ETL activation reads this table, but it is not matched "
+                              "to any dbt model or source — data is pushed to an operational "
+                              "system with no quality evidence at all.",
+                    "target": {"schema": obj.get("table_schema"), "table": obj.get("table_name")},
+                    "details": {"sync_id": sync.get("sync_id"), "label": sync.get("label"),
+                                "destination_name": sync.get("destination_name"),
+                                "destination_object": sync.get("destination_object")},
+                })
 
         by_verdict: dict[str, int] = {}
         for sync in evaluated:
@@ -443,10 +463,15 @@ class CombinedNormalizer:
         freshness = (obj.get("dbt") or {}).get("freshness") or {}
         has_freshness = bool(freshness.get("status")) or bool(freshness.get("configured"))
 
-        failing = 0
+        failing = warn_failing = 0
         for test in (obj.get("dbt") or {}).get("tests") or []:
             if (test.get("status") or "").lower() in {"fail", "error", "runtime error"}:
                 failing += 1
+            elif is_warn_with_failures(test):
+                # A warn-severity test that is actually firing: the dbt run stays
+                # green, but rows are failing — triage must see it, not just the
+                # activation gate.
+                warn_failing += 1
         if (freshness.get("status") or "").lower() in {"fail", "error", "runtime error"}:
             failing += 1
 
@@ -455,7 +480,8 @@ class CombinedNormalizer:
 
         if high_risk or failing > 0:
             risk = "high"
-        elif rec_tests > 0 or (has_pk and not has_pk_tests()) or obj.get("match_confidence") == MATCH_UNMATCHED:
+        elif (warn_failing > 0 or rec_tests > 0 or (has_pk and not has_pk_tests())
+              or obj.get("match_confidence") == MATCH_UNMATCHED):
             risk = "medium"
         else:
             risk = "low"
@@ -465,6 +491,7 @@ class CombinedNormalizer:
             "has_primary_key_tests": has_pk_tests(),
             "has_freshness_check": has_freshness,
             "failing_tests_count": failing,
+            "warn_tests_with_failures_count": warn_failing,
             "recommended_tests_count": rec_tests,
             "risk_level": risk,
         }

@@ -50,14 +50,17 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
         risk_level: str | None = None,
         missing_coverage: bool | None = None,
         failing_tests: bool | None = None,
+        warn_test_failures: bool | None = None,
         stale: bool | None = None,
         limit: int | None = None,
     ) -> dict:
         """Compact, filterable index of warehouse objects for triage (small rows,
         no columns/tests). Filter by schema, risk_level (low|medium|high),
-        missing_coverage, failing_tests, stale. Use get_warehouse_object for detail."""
+        missing_coverage, failing_tests, warn_test_failures (warn-severity tests
+        firing while the run stays green), stale. get_warehouse_object for detail."""
         return tools.list_warehouse_objects(
-            schema, risk_level, missing_coverage, failing_tests, stale, limit
+            schema, risk_level, missing_coverage, failing_tests,
+            warn_test_failures, stale, limit
         )
 
     # --- Detail -----------------------------------------------------------

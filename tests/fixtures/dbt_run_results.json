@@ -1,11 +1,49 @@
 {
-  "metadata": { "dbt_version": "1.7.0" },
+  "metadata": {
+    "dbt_version": "1.7.0"
+  },
   "results": [
-    { "unique_id": "model.demo.stg_salesforce__account", "status": "success", "execution_time": 1.23, "failures": null, "message": null },
-    { "unique_id": "model.demo.dim_account", "status": "success", "execution_time": 2.10, "failures": null, "message": null },
-    { "unique_id": "test.demo.not_null_stg_salesforce__account_id", "status": "pass", "execution_time": 0.40, "failures": 0, "message": null },
-    { "unique_id": "test.demo.unique_stg_salesforce__account_id", "status": "pass", "execution_time": 0.38, "failures": 0, "message": null },
-    { "unique_id": "test.demo.accepted_values_stg_salesforce__account_status", "status": "fail", "execution_time": 0.55, "failures": 3, "message": "Got 3 results, configured to fail if != 0" },
-    { "unique_id": "test.demo.not_null_dim_account_account_id", "status": "pass", "execution_time": 0.31, "failures": 0, "message": null }
+    {
+      "unique_id": "model.demo.stg_salesforce__account",
+      "status": "success",
+      "execution_time": 1.23,
+      "failures": null,
+      "message": null
+    },
+    {
+      "unique_id": "model.demo.dim_account",
+      "status": "success",
+      "execution_time": 2.1,
+      "failures": null,
+      "message": null
+    },
+    {
+      "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+      "status": "pass",
+      "execution_time": 0.4,
+      "failures": 0,
+      "message": null
+    },
+    {
+      "unique_id": "test.demo.unique_stg_salesforce__account_id",
+      "status": "pass",
+      "execution_time": 0.38,
+      "failures": 0,
+      "message": null
+    },
+    {
+      "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+      "status": "warn",
+      "execution_time": 0.55,
+      "failures": 3,
+      "message": "Got 3 results, configured to fail if != 0"
+    },
+    {
+      "unique_id": "test.demo.not_null_dim_account_account_id",
+      "status": "pass",
+      "execution_time": 0.31,
+      "failures": 0,
+      "message": null
+    }
   ]
 }

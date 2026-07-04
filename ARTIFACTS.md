@@ -230,6 +230,7 @@ downstream models.
     "has_primary_key_tests": true,
     "has_freshness_check": true,
     "failing_tests_count": 1,
+    "warn_tests_with_failures_count": 0,
     "recommended_tests_count": 1,
     "risk_level": "high"
   }
@@ -250,7 +251,9 @@ downstream models.
 | `columns[].dbt_tests` | dbt test types already present on that column |
 | `columns[].recommended_tests` | Test names recommended for that column (see 2.4) |
 | `match_confidence` | `exact_relation`, `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched` |
-| `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if recommendations exist, PK tests are missing, or unmatched) |
+| `dq_summary.failing_tests_count` | Tests with status `fail`/`error` (the dbt run is red) |
+| `dq_summary.warn_tests_with_failures_count` | Warn-severity tests that are **firing** (failing rows while the run stays green) — the reverse-ETL trap; triage-visible, and the activation gate blocks on it |
+| `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if warn tests are firing, recommendations exist, PK tests are missing, or unmatched) |
 
 **Primary key detection.** Fivetran's config API does not return an
 `is_primary_key` field for most connectors. Key columns are instead locked from
@@ -415,7 +418,7 @@ Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
         "verdict": "block",
         "source_node_unique_id": "model.github_dq.customer_churn",
         "reasons": [ { "code": "upstream_warn_test_failures", "severity": "high", "message": "…" } ],
-        "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
+        "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "tests_seen": 18, "tests_with_results": 18, "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
       }
     }
   ]
@@ -424,16 +427,22 @@ Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
 
 | `readiness.verdict` | Meaning |
 |---|---|
-| `allow` | No failing tests, stale syncs, or governance gaps upstream. |
-| `warn` | Source model has no enforced contract, or an upstream source is unmatched. |
-| `block` | Upstream failing test, a **warn-severity test with failures > 0**, failing source freshness, or a stale upstream Fivetran sync — do not push. |
-| `unknown` | Sync source object is not matched to a dbt model/source (no lineage to assess). |
+| `allow` | Positive evidence only: upstream tests exist, ran, and passed; no stale syncs or governance gaps. |
+| `warn` | Source model has no enforced contract, an upstream source is unmatched, **or the gate lacks evidence** — no upstream tests exist (`no_upstream_tests`), tests have no run results (`no_test_results`), or Fivetran coverage data is absent from the build (`coverage_checks_skipped`). Absence of evidence never yields `allow`. |
+| `block` | Upstream failing test, a **warn-severity test with failures > 0** (or warn status with the count missing), failing source freshness, or a stale upstream Fivetran sync — do not push. |
+| `unknown` | Sync source object is not matched to a dbt model/source (no lineage to assess). Also raises an `activates_unverified_data` (medium) risk in `dq_recommendations` when the source object is named. |
+
+`readiness.upstream` also reports the evidence base: `tests_seen` (tests defined
+upstream) and `tests_with_results` (those with a run result).
 
 Each warehouse object the sync consumes also carries a compact
 `warehouse_objects[].activations[]` back-reference (`sync_id`, `label`,
 `destination_name`, `destination_object`, `readiness_verdict`), and objects
 feeding a `block`/`warn` sync raise an `activates_bad_data` risk in
-`dq_recommendations`.
+`dq_recommendations`; an `unknown`-verdict sync with a named source object raises
+`activates_unverified_data` (medium) — data pushed to prod with no quality
+evidence at all. If the workspace has more matching syncs than `max_syncs`, the
+overflow is recorded in `errors[]` as `Truncated` (never silently dropped).
 
 ---
 

@@ -110,6 +110,7 @@ def list_warehouse_objects(
     risk_level: str | None = None,
     missing_coverage: bool | None = None,
     failing_tests: bool | None = None,
+    warn_test_failures: bool | None = None,
     stale: bool | None = None,
     limit: int | None = None,
     settings: Settings | None = None,
@@ -118,8 +119,9 @@ def list_warehouse_objects(
 
     Returns small rows (no columns/tests payload). Filters (AND-combined):
     ``schema``, ``risk_level`` (low|medium|high), ``missing_coverage`` (unmatched
-    to dbt), ``failing_tests`` (>0 failing), ``stale`` (Fivetran sync past
-    threshold). Use ``get_warehouse_object`` for the full detail of one object.
+    to dbt), ``failing_tests`` (>0 failing), ``warn_test_failures`` (warn-severity
+    tests firing — the run is green but rows are failing), ``stale`` (Fivetran
+    sync past threshold). Use ``get_warehouse_object`` for the full detail.
     """
     settings = settings or get_settings()
     doc = _latest(settings)
@@ -130,6 +132,7 @@ def list_warehouse_objects(
         dbt = o.get("dbt", {})
         has_coverage = bool(dbt.get("source_unique_id") or dbt.get("model_unique_ids"))
         is_failing = (summary.get("failing_tests_count") or 0) > 0
+        is_warn_firing = (summary.get("warn_tests_with_failures_count") or 0) > 0
         is_missing = o.get("match_confidence") == "unmatched"
         is_stale = o.get("object_id") in stale_ids
 
@@ -140,6 +143,8 @@ def list_warehouse_objects(
         if missing_coverage is not None and is_missing != missing_coverage:
             continue
         if failing_tests is not None and is_failing != failing_tests:
+            continue
+        if warn_test_failures is not None and is_warn_firing != warn_test_failures:
             continue
         if stale is not None and is_stale != stale:
             continue
@@ -153,6 +158,7 @@ def list_warehouse_objects(
             "has_dbt_coverage": has_coverage,
             "has_freshness_check": summary.get("has_freshness_check", False),
             "failing_tests_count": summary.get("failing_tests_count", 0),
+            "warn_tests_with_failures_count": summary.get("warn_tests_with_failures_count", 0),
             "recommended_tests_count": summary.get("recommended_tests_count", 0),
             "is_stale": is_stale,
         })
@@ -313,7 +319,7 @@ def get_dq_summary(settings: Settings | None = None) -> dict:
     stale_ids = _stale_object_ids(doc)
 
     risk_levels = {"low": 0, "medium": 0, "high": 0}
-    matched = failing = missing = with_freshness = 0
+    matched = failing = warn_failing = missing = with_freshness = 0
     for o in objs:
         s = o.get("dq_summary", {})
         risk_levels[s.get("risk_level", "low")] = risk_levels.get(s.get("risk_level", "low"), 0) + 1
@@ -323,6 +329,8 @@ def get_dq_summary(settings: Settings | None = None) -> dict:
             missing += 1
         if (s.get("failing_tests_count") or 0) > 0:
             failing += 1
+        if (s.get("warn_tests_with_failures_count") or 0) > 0:
+            warn_failing += 1
         if s.get("has_freshness_check"):
             with_freshness += 1
 
@@ -341,6 +349,7 @@ def get_dq_summary(settings: Settings | None = None) -> dict:
         "unmatched": len(objs) - matched,
         "risk_levels": risk_levels,
         "objects_with_failing_tests": failing,
+        "objects_with_warn_test_failures": warn_failing,
         "objects_missing_dbt_coverage": missing,
         "objects_stale": len(stale_ids),
         "objects_with_freshness": with_freshness,

@@ -9,15 +9,19 @@ This module answers, per sync: **allow | warn | block**, by traversing the dbt
 lineage *upstream* from the sync's source model and inspecting the DQ posture of
 everything that feeds it.
 
-Policy (deterministic):
+Policy (deterministic, fail-closed):
   block  — any upstream dbt test is failing (fail/error), OR a warn-severity test
            has failures > 0 (a soft test that is actually firing), OR a source
            freshness check is failing, OR an upstream Fivetran object is stale.
   warn   — the source model has no enforced contract, OR an upstream object is
-           unmatched to dbt (a coverage blind spot on data headed to prod).
-  allow  — none of the above.
+           unmatched to dbt (a coverage blind spot on data headed to prod), OR
+           the gate lacks evidence: no upstream tests exist, tests exist but have
+           no run results, or Fivetran coverage data is absent from the build.
+           Absence of evidence is never treated as "allow".
+  allow  — upstream tests exist, ran, and are clean; no stale syncs or gaps.
   unknown— the sync's source object could not be matched to a dbt model/source
-           (no lineage to reason over).
+           (no lineage to reason over). Combined with a named source object this
+           raises an ``activates_unverified_data`` risk downstream.
 """
 
 from __future__ import annotations
@@ -36,10 +40,20 @@ def _is_warn_with_failures(test: dict) -> bool:
     status = (test.get("status") or "").lower()
     if severity != "warn" and status != "warn":
         return False
+    failures = test.get("failures")
+    # A warn *status* means the test fired; if the artifact omits the failures
+    # count, fail closed and treat it as firing rather than assuming zero.
+    if failures is None:
+        return status == "warn"
     try:
-        return int(test.get("failures") or 0) > 0
+        return int(failures) > 0
     except (TypeError, ValueError):
-        return False
+        return status == "warn"
+
+
+# Public: shared with the combined normalizer's dq_summary so triage counts and
+# the gate agree on what a "firing warn test" is.
+is_warn_with_failures = _is_warn_with_failures
 
 
 def evaluate_syncs(
@@ -84,19 +98,21 @@ def evaluate_syncs(
         if (obj.get("dbt") or {}).get("source_unique_id")
     }
 
+    has_coverage_data = bool(warehouse_objects)
+
     out: list[dict] = []
     for sync in syncs or []:
         enriched = dict(sync)
         enriched["readiness"] = _evaluate_one(
             sync, model_lookup, source_lookup, models_by_uid, sources_by_uid,
-            lineage, stale_sources, matched_source_uids,
+            lineage, stale_sources, matched_source_uids, has_coverage_data,
         )
         out.append(enriched)
     return out
 
 
 def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_uid,
-                  lineage, stale_sources, matched_source_uids) -> dict:
+                  lineage, stale_sources, matched_source_uids, has_coverage_data) -> dict:
     obj = sync.get("source_object") or {}
     schema = (obj.get("table_schema") or "").lower()
     name = (obj.get("table_name") or "").lower()
@@ -113,11 +129,13 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
             "source_node_unique_id": None,
             "reasons": [{
                 "code": "source_not_matched",
-                "severity": "info",
+                "severity": "medium",
                 "message": "Activation source object is not matched to a dbt model or source; "
-                           "no lineage available to assess readiness.",
+                           "no lineage available to assess readiness. This sync pushes "
+                           "unverified data if the source is in scope.",
             }],
             "upstream": {"node_count": 0, "failing_tests": 0, "warn_tests_with_failures": 0,
+                         "tests_seen": 0, "tests_with_results": 0,
                          "stale_objects": 0, "missing_contract": False, "unmatched_upstream": 0},
         }
 
@@ -127,11 +145,19 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
 
     reasons: list[dict] = []
     failing = warn_failing = stale = unmatched = 0
+    tests_seen = tests_with_results = 0
     failing_detail: list[dict] = []
+
+    def _tally(test: dict) -> None:
+        nonlocal tests_seen, tests_with_results
+        tests_seen += 1
+        if test.get("status") is not None:
+            tests_with_results += 1
 
     for uid in upstream_models:
         model = models_by_uid.get(uid) or {}
         for test in model.get("tests") or []:
+            _tally(test)
             if _is_failing(test):
                 failing += 1
                 failing_detail.append({"node": uid, "test": test.get("name"),
@@ -148,6 +174,7 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
             failing += 1
             failing_detail.append({"node": uid, "test": "source_freshness", "status": fr.get("status")})
         for test in src.get("tests") or []:
+            _tally(test)
             if _is_failing(test):
                 failing += 1
                 failing_detail.append({"node": uid, "test": test.get("name"), "status": test.get("status")})
@@ -159,6 +186,25 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
             stale += 1
         if uid not in matched_source_uids and matched_source_uids:
             unmatched += 1
+
+    # Evidence gaps — the gate must not say "allow" when it simply has no data.
+    no_evidence = False
+    if tests_seen == 0:
+        no_evidence = True
+        reasons.append({"code": "no_upstream_tests", "severity": "medium",
+                        "message": "No dbt tests exist anywhere upstream of this activation; "
+                                   "there is no quality evidence to clear it on."})
+    elif tests_with_results == 0:
+        no_evidence = True
+        reasons.append({"code": "no_test_results", "severity": "medium",
+                        "message": f"{tests_seen} upstream test(s) are defined but none have a "
+                                   "run result (run_results.json missing or stale); the tests "
+                                   "may be failing without the gate seeing it."})
+    if not has_coverage_data:
+        no_evidence = True
+        reasons.append({"code": "coverage_checks_skipped", "severity": "medium",
+                        "message": "No Fivetran coverage data in this build; the stale-sync and "
+                                   "unmatched-upstream checks could not run."})
 
     # Contract on the source model itself (only if it is a model).
     source_model = models_by_uid.get(source_model_uid) or {}
@@ -185,12 +231,12 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
 
     if failing or warn_failing or stale:
         verdict = "block"
-    elif missing_contract or unmatched:
+    elif missing_contract or unmatched or no_evidence:
         verdict = "warn"
     else:
         verdict = "allow"
         reasons.append({"code": "clean", "severity": "info",
-                        "message": "No failing tests, stale syncs, or governance gaps upstream."})
+                        "message": "Upstream tests ran clean; no stale syncs or governance gaps."})
 
     return {
         "verdict": verdict,
@@ -201,6 +247,8 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
             "node_count": len(upstream),
             "failing_tests": failing,
             "warn_tests_with_failures": warn_failing,
+            "tests_seen": tests_seen,
+            "tests_with_results": tests_with_results,
             "stale_objects": stale,
             "missing_contract": missing_contract,
             "unmatched_upstream": unmatched,

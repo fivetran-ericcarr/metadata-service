@@ -52,7 +52,7 @@
       "column_name": "id",
       "attached_node": "model.demo.stg_salesforce__account",
       "test_metadata": { "name": "not_null", "kwargs": { "column_name": "id" } },
-      "config": { "severity": "error" },
+      "config": { "severity": "ERROR" },
       "tags": [],
       "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
     },
@@ -63,7 +63,7 @@
       "column_name": "id",
       "attached_node": "model.demo.stg_salesforce__account",
       "test_metadata": { "name": "unique", "kwargs": { "column_name": "id" } },
-      "config": { "severity": "error" },
+      "config": { "severity": "ERROR" },
       "tags": [],
       "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
     },
@@ -74,7 +74,7 @@
       "column_name": "status",
       "attached_node": "model.demo.stg_salesforce__account",
       "test_metadata": { "name": "accepted_values", "kwargs": { "column_name": "status", "values": ["active", "inactive"] } },
-      "config": { "severity": "warn" },
+      "config": { "severity": "WARN" },
       "tags": [],
       "depends_on": { "nodes": ["model.demo.stg_salesforce__account"] }
     },
@@ -85,7 +85,7 @@
       "column_name": "account_id",
       "attached_node": "model.demo.dim_account",
       "test_metadata": { "name": "not_null", "kwargs": { "column_name": "account_id" } },
-      "config": { "severity": "error" },
+      "config": { "severity": "ERROR" },
       "tags": [],
       "depends_on": { "nodes": ["model.demo.dim_account"] }
     }
