@@ -130,7 +130,8 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `METADATA_LOCAL_PATH` | Local snapshot dir | `./metadata_snapshots` |
 | `METADATA_S3_BUCKET` / `METADATA_S3_PREFIX` | S3 target | — / `metadata` |
 | `LOG_LEVEL` | Logging level | `INFO` |
-| `API_HOST` / `API_PORT` | FastAPI bind | `0.0.0.0` / `8080` |
+| `API_HOST` / `API_PORT` | FastAPI bind (loopback by default — set `0.0.0.0` + an API key to serve remotely) | `127.0.0.1` / `8080` |
+| `METADATA_API_KEY` | When set, every REST route except `/health` requires it (`X-API-Key` or `Authorization: Bearer`) | — |
 | `WAREHOUSE_TYPE` | Prefix for object ids (`warehouse://...`) | `warehouse` |
 | `WAREHOUSE_DATABASE` | Warehouse DB name (also scopes Activations to syncs reading it) | — |
 | `STALE_SYNC_THRESHOLD_HOURS` | Stale-sync risk threshold | `24` |
@@ -252,11 +253,14 @@ With uv (no activated env): set `"command": "uv"`, `"args": ["run", "metadata-se
 **Hosted (HTTP)** — for a remote agent in a DQaaS platform:
 
 ```bash
-metadata-service serve-mcp --transport http --host 0.0.0.0 --port 8765
+metadata-service serve-mcp --transport http --port 8765   # binds 127.0.0.1 by default
 # agent connects to the streamable-http endpoint at http://<host>:8765/mcp
 ```
 
 Transport and bind can also be set via `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT`.
+The MCP HTTP transports have **no authentication** — the default bind is
+loopback; to expose them beyond the host, front the port with an authenticating
+reverse proxy (the REST API, by contrast, supports `METADATA_API_KEY` natively).
 
 The tool logic lives in `mcp/tools.py` as plain functions (SDK-independent and
 unit-tested). `mcp/server.py` binds them to the official MCP SDK; if the SDK is

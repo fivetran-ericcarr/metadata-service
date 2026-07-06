@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 from .clients import ActivationsClient, DbtClient, FivetranClient
@@ -21,9 +22,15 @@ from .normalizers import (
     DbtNormalizer,
     FivetranNormalizer,
 )
+from .exceptions import RefreshInProgressError
 from .storage.base import get_storage
 
 logger = logging.getLogger(__name__)
+
+# One build at a time per process: concurrent refreshes race the latest.json
+# write, double-bill the source APIs, and compute drift against the same
+# previous snapshot.
+_REFRESH_LOCK = threading.Lock()
 
 
 def build_metadata(
@@ -67,6 +74,19 @@ def build_metadata(
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
     activations_norm = ActivationsNormalizer().normalize(activations_raw)
     doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm, activations_norm)
+    # Record what this build covered so drift only compares like-for-like — a
+    # scoped/partial run diffed against a full baseline mass-fires removed_table.
+    doc["build_scope"] = {
+        "group_id": group_id,
+        "include_fivetran": include_fivetran,
+        "include_dbt": include_dbt,
+        "include_activations": include_activations,
+        "connected_only": connected_only,
+        "skip_paused": skip_paused,
+        "dbt_project_id": dbt_project_id,
+        "dbt_job_id": dbt_job_id,
+        "fixtures": bool(fixtures_dir),
+    }
     logger.info(
         "Built metadata: %s warehouse objects, %s recommendations, %s errors",
         len(doc.get("warehouse_objects", [])),
@@ -93,28 +113,36 @@ def build_and_store(
 ) -> dict:
     """Build metadata, attach drift vs. the previous snapshot, persist, and return
     a summary ``{status, snapshot_uri, generated_at, object_count, error_count, doc}``.
+
+    Raises :class:`RefreshInProgressError` if another build is already running in
+    this process (REST maps it to 409).
     """
     from .dq.drift import detect_drift  # local import to avoid cycles
 
-    storage = get_storage(settings)
-    previous = storage.read_latest()
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        raise RefreshInProgressError("A metadata build is already running in this process.")
+    try:
+        storage = get_storage(settings)
+        previous = storage.read_latest()
 
-    doc = build_metadata(
-        settings,
-        group_id=group_id,
-        include_fivetran=include_fivetran,
-        include_dbt=include_dbt,
-        include_activations=include_activations,
-        fixtures_dir=fixtures_dir,
-        aliases=aliases,
-        connected_only=connected_only,
-        skip_paused=skip_paused,
-        dbt_project_id=dbt_project_id,
-        dbt_job_id=dbt_job_id,
-        enrich_warehouse=enrich_warehouse,
-    )
-    doc["schema_drift"] = detect_drift(previous, doc)
-    uri = storage.write_snapshot(doc)
+        doc = build_metadata(
+            settings,
+            group_id=group_id,
+            include_fivetran=include_fivetran,
+            include_dbt=include_dbt,
+            include_activations=include_activations,
+            fixtures_dir=fixtures_dir,
+            aliases=aliases,
+            connected_only=connected_only,
+            skip_paused=skip_paused,
+            dbt_project_id=dbt_project_id,
+            dbt_job_id=dbt_job_id,
+            enrich_warehouse=enrich_warehouse,
+        )
+        doc["schema_drift"] = detect_drift(previous, doc)
+        uri = storage.write_snapshot(doc)
+    finally:
+        _REFRESH_LOCK.release()
 
     return {
         "status": "success",

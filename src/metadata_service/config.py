@@ -50,12 +50,17 @@ class Settings(BaseSettings):
 
     # --- Service ----------------------------------------------------------
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    api_host: str = Field(default="0.0.0.0", alias="API_HOST")
+    # Bind loopback by default: the snapshot is a full warehouse inventory.
+    # Set API_HOST=0.0.0.0 explicitly (with METADATA_API_KEY) to serve remotely.
+    api_host: str = Field(default="127.0.0.1", alias="API_HOST")
     api_port: int = Field(default=8080, alias="API_PORT")
+    # When set, every REST route except /health requires this key
+    # (X-API-Key header or Authorization: Bearer).
+    metadata_api_key: str | None = Field(default=None, alias="METADATA_API_KEY")
 
     # --- MCP server -------------------------------------------------------
     mcp_transport: str = Field(default="stdio", alias="MCP_TRANSPORT")
-    mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
+    mcp_host: str = Field(default="127.0.0.1", alias="MCP_HOST")
     mcp_port: int = Field(default=8765, alias="MCP_PORT")
 
     # --- Data Quality -----------------------------------------------------

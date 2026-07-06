@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from ..models.common import utcnow_iso
+
+logger = logging.getLogger(__name__)
 
 SEVERITY = {
     "new_table": "low",
@@ -22,8 +26,24 @@ SEVERITY = {
 
 
 def detect_drift(previous: dict | None, latest: dict | None) -> list[dict]:
-    """Compare two normalized snapshots and return a list of drift records."""
+    """Compare two normalized snapshots and return a list of drift records.
+
+    Only like-for-like builds are compared: a scoped/partial run (different
+    group, ``--no-fivetran``, different filters) diffed against a full baseline
+    would mass-fire high-severity ``removed_table`` records for everything the
+    scope excluded, so scope mismatches skip drift instead.
+    """
     if not previous or not latest:
+        return []
+
+    prev_scope = previous.get("build_scope")
+    latest_scope = latest.get("build_scope")
+    if prev_scope != latest_scope:
+        logger.info(
+            "Drift skipped: build scopes differ (previous=%s, latest=%s); "
+            "comparing them would report scope changes as schema drift.",
+            prev_scope, latest_scope,
+        )
         return []
 
     prev_objs = _index_objects(previous)

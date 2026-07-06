@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security / Hardening
+- **REST API auth + loopback defaults.** `API_HOST` and `MCP_HOST` now default to
+  `127.0.0.1` (the snapshot is a full warehouse inventory — schemas, PII-signal
+  columns, CRM field mappings). New `METADATA_API_KEY`: when set, every REST
+  route except `/health` requires it via `X-API-Key` or `Authorization: Bearer`
+  (constant-time compare). MCP HTTP transports remain auth-less by design —
+  loopback default + documented reverse-proxy requirement. Refresh failures now
+  return a generic 500 detail instead of echoing internal exception text.
+- **Atomic snapshot writes + refresh lock.** `latest.json` (and dated snapshots)
+  are written via temp-file + `os.replace`, so a crash or concurrent reader can
+  never see a torn file that 500s every MCP/REST consumer at once. A per-process
+  lock makes concurrent builds fail fast: REST returns **409**, the MCP
+  `refresh_metadata` tool returns `{status: in_progress_error}`, and
+  `RefreshInProgressError` is raised programmatically.
+- **MCP refresh off the event loop.** `refresh_metadata` now runs in a worker
+  thread (`anyio.to_thread`) — a multi-minute extraction no longer freezes every
+  other session on the HTTP transports.
+- **Extractor fails fast on unrecoverable errors.** `FivetranAuthError` and
+  `FivetranRateLimitError` now abort the run instead of being swallowed per-item:
+  previously a revoked token or exhausted rate limit produced thousands of doomed
+  retry requests and a "successful" snapshot with no column metadata. Ordinary
+  per-table errors still degrade into `errors[]`. Null schema/table configs no
+  longer crash the schema walk.
+- **Drift only compares like-for-like builds.** Snapshots now record a
+  `build_scope` block (group, include flags, filters, project); drift is skipped
+  when scopes differ — a scoped run diffed against a full baseline used to
+  mass-fire high-severity `removed_table` for everything the scope excluded.
+- **Column lineage resolves tables by qualification, not name.** Leaf tables now
+  resolve via (database, schema, name) → (schema, name) → unambiguous-bare-name
+  tiers; two connectors landing the same table name in different schemas no
+  longer get each other's column impact, and an ambiguous unqualified name
+  produces no edge instead of a wrong one.
+- **Combined normalizer degrades per-table.** One malformed table now lands in
+  `errors[]` (source `combined`) instead of crashing the whole snapshot build;
+  non-string sync timestamps no longer crash staleness parsing.
+
 ### Fixed
 - **Census pagination** — the Activations client fetched only page 1 of `/syncs`,
   `/sources`, and `/destinations` (Census default `per_page=25`), silently

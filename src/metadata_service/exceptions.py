@@ -67,5 +67,9 @@ class StorageError(MetadataServiceError):
     """Storage backend read/write failure."""
 
 
+class RefreshInProgressError(MetadataServiceError):
+    """A snapshot build/refresh is already running in this process."""
+
+
 class NormalizationError(MetadataServiceError):
     """Failed to normalize raw metadata into the canonical shape."""

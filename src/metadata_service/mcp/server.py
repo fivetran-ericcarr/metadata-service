@@ -23,11 +23,13 @@ _INSTALL_HINT = (
 )
 
 
-def build_server(host: str = "0.0.0.0", port: int = 8765):
+def build_server(host: str = "127.0.0.1", port: int = 8765):
     """Construct and return a configured FastMCP server instance.
 
     Raises ImportError (with install instructions) if the SDK is unavailable.
-    ``host``/``port`` only apply to HTTP transports.
+    ``host``/``port`` only apply to HTTP transports. The default bind is
+    loopback: FastMCP's HTTP transports have no authentication, so remote
+    exposure should go through an authenticating reverse proxy.
     """
     try:
         from mcp.server.fastmcp import FastMCP  # type: ignore
@@ -141,18 +143,32 @@ def build_server(host: str = "0.0.0.0", port: int = 8765):
 
     # --- Action -----------------------------------------------------------
     @server.tool()
-    def refresh_metadata(
+    async def refresh_metadata(
         fivetran_group_id: str | None = None,
         include_fivetran: bool = True,
         include_dbt: bool = True,
     ) -> dict:
-        """Run extraction + normalization and write a new latest snapshot."""
-        return tools.refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)
+        """Run extraction + normalization and write a new latest snapshot.
+        Long-running (minutes on live accounts); returns {status: in_progress_error}
+        if a build is already running."""
+        import anyio
+
+        from ..exceptions import RefreshInProgressError
+
+        try:
+            # Extraction takes minutes; run it in a worker thread so one refresh
+            # doesn't freeze every other session on the HTTP transports.
+            return await anyio.to_thread.run_sync(
+                lambda: tools.refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)
+            )
+        except RefreshInProgressError:
+            return {"status": "in_progress_error",
+                    "message": "A refresh is already running; try again when it finishes."}
 
     return server
 
 
-def run_server(transport: str = "stdio", host: str = "0.0.0.0", port: int = 8765) -> None:
+def run_server(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765) -> None:
     """Build and run the MCP server.
 
     transport: ``stdio`` (local subprocess) | ``http``/``streamable-http`` |
