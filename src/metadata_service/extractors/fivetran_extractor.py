@@ -9,10 +9,15 @@ from __future__ import annotations
 import logging
 
 from ..clients.fivetran_client import FivetranClient
-from ..exceptions import FivetranError
+from ..exceptions import FivetranAuthError, FivetranError, FivetranRateLimitError
 from ..models.common import utcnow_iso
 
 logger = logging.getLogger(__name__)
+
+# Unrecoverable for the whole run: retrying per-item just hammers the API with
+# doomed requests (a revoked token or an exhausted rate limit will not heal
+# between loop iterations). Re-raise instead of degrading into an error entry.
+_FATAL_ERRORS = (FivetranAuthError, FivetranRateLimitError)
 
 
 class FivetranExtractor:
@@ -59,6 +64,8 @@ class FivetranExtractor:
 
             try:
                 detail = self._client.get_connection(connection_id)
+            except _FATAL_ERRORS:
+                raise
             except FivetranError as exc:
                 detail = dict(summary)
                 errors.append(self._err(connection_id, None, None, exc))
@@ -79,6 +86,8 @@ class FivetranExtractor:
 
             try:
                 schemas = self._client.get_connection_schemas(connection_id)
+            except _FATAL_ERRORS:
+                raise
             except FivetranError as exc:
                 schemas = {}
                 errors.append(self._err(connection_id, None, None, exc))
@@ -90,6 +99,8 @@ class FivetranExtractor:
                     cols = self._client.get_table_columns(connection_id, schema_name, table_name)
                     columns_by_table[f"{schema_name}.{table_name}"] = cols
                     column_count += len((cols or {}).get("columns", {}) or {})
+                except _FATAL_ERRORS:
+                    raise
                 except FivetranError as exc:
                     errors.append(self._err(connection_id, schema_name, table_name, exc))
                     continue
@@ -100,6 +111,8 @@ class FivetranExtractor:
                 if service not in connector_type_cache:
                     try:
                         connector_type_cache[service] = self._client.get_connector_type(service)
+                    except _FATAL_ERRORS:
+                        raise
                     except FivetranError as exc:
                         connector_type_cache[service] = {}
                         errors.append(self._err(connection_id, None, None, exc))
@@ -145,10 +158,10 @@ def _iter_enabled_tables(schemas: dict):
     """Yield (schema_name, table_name) for every enabled table in a schema config."""
     schema_map = ((schemas or {}).get("schemas")) or {}
     for schema_name, schema_cfg in schema_map.items():
+        schema_cfg = schema_cfg or {}
         if schema_cfg.get("enabled") is False:
             continue
-        tables = (schema_cfg or {}).get("tables") or {}
-        for table_name, table_cfg in tables.items():
-            if table_cfg.get("enabled") is False:
+        for table_name, table_cfg in (schema_cfg.get("tables") or {}).items():
+            if (table_cfg or {}).get("enabled") is False:
                 continue
             yield schema_name, table_name

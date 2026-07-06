@@ -3,17 +3,39 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..config import get_settings
+from ..exceptions import RefreshInProgressError
 from ..pipeline import build_and_store
 from ..storage.base import get_storage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+async def require_api_key(request: Request) -> None:
+    """Enforce METADATA_API_KEY on every route except /health.
+
+    Accepts the key via ``X-API-Key`` or ``Authorization: Bearer <key>``. When no
+    key is configured the API is open — pair that only with the loopback default
+    bind (API_HOST=127.0.0.1); set a key before exposing the service remotely.
+    """
+    configured = get_settings().metadata_api_key
+    if not configured or request.url.path == "/health":
+        return
+    provided = request.headers.get("x-api-key")
+    if not provided:
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:]
+    if not provided or not secrets.compare_digest(provided, configured):
+        raise HTTPException(status_code=401, detail="Missing or invalid API key.")
+
+
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 class RefreshRequest(BaseModel):
@@ -45,9 +67,13 @@ def refresh_metadata(body: RefreshRequest) -> dict:
             include_fivetran=body.include_fivetran,
             include_dbt=body.include_dbt,
         )
-    except Exception as exc:  # surface as 500 with a clear message
+    except RefreshInProgressError as exc:
+        raise HTTPException(status_code=409, detail="A refresh is already in progress.") from exc
+    except Exception as exc:
+        # Log the detail server-side; don't echo internals (paths, hosts, env
+        # var names) to callers.
         logger.exception("Metadata refresh failed")
-        raise HTTPException(status_code=500, detail=f"Refresh failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Refresh failed; see server logs.") from exc
     result.pop("doc", None)  # don't return the whole doc inline
     return result
 

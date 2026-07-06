@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 from ..exceptions import StorageError
@@ -19,6 +21,26 @@ from ..models.common import snapshot_timestamp
 logger = logging.getLogger(__name__)
 
 _LATEST = "latest.json"
+
+
+def _write_atomic(path: Path, payload: str) -> None:
+    """Write via a temp file + os.replace so readers never see a torn file.
+
+    latest.json is read concurrently by the REST API and MCP server; a plain
+    write_text truncates in place, so a crash or concurrent read mid-write
+    would break every consumer at once.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class LocalStorage:
@@ -42,8 +64,8 @@ class LocalStorage:
 
         try:
             payload = json.dumps(metadata, indent=2, default=str)
-            snapshot_path.write_text(payload, encoding="utf-8")
-            (self._root / _LATEST).write_text(payload, encoding="utf-8")
+            _write_atomic(snapshot_path, payload)
+            _write_atomic(self._root / _LATEST, payload)
         except OSError as exc:
             raise StorageError(f"Failed to write snapshot to {snapshot_path}: {exc}") from exc
 

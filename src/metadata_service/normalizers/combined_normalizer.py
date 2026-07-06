@@ -53,16 +53,32 @@ class CombinedNormalizer:
 
         warehouse_objects: list[dict] = []
         all_recommendations: list[dict] = []
+        build_errors: list[dict] = []
 
         for conn in fivetran_normalized.get("connections", []) or []:
             for table in conn.get("tables", []) or []:
-                obj = self._build_object(
-                    conn, table, source_index, model_index,
-                    sources_by_uid, models_by_uid, lineage, exposures, metrics,
-                )
-                recs = recommend_for_object(obj, stale_threshold_hours=self._stale_hours)
-                self._apply_recommendations(obj, recs)
-                obj["dq_summary"] = self._summarize(obj, recs)
+                # One malformed table must degrade into errors[], not kill the
+                # whole snapshot (the dbt normalizer already works this way).
+                try:
+                    obj = self._build_object(
+                        conn, table, source_index, model_index,
+                        sources_by_uid, models_by_uid, lineage, exposures, metrics,
+                    )
+                    recs = recommend_for_object(obj, stale_threshold_hours=self._stale_hours)
+                    self._apply_recommendations(obj, recs)
+                    obj["dq_summary"] = self._summarize(obj, recs)
+                except Exception as exc:
+                    logger.warning("Failed to build warehouse object %s.%s: %s",
+                                   table.get("destination_schema"), table.get("destination_table"), exc)
+                    build_errors.append({
+                        "source": "combined",
+                        "connection_id": conn.get("connection_id"),
+                        "schema": table.get("destination_schema"),
+                        "table": table.get("destination_table"),
+                        "error_type": type(exc).__name__,
+                        "error_message": f"Failed to build warehouse object: {exc}",
+                    })
+                    continue
                 warehouse_objects.append(obj)
                 all_recommendations.extend(recs)
 
@@ -75,7 +91,8 @@ class CombinedNormalizer:
 
         errors = (list(fivetran_normalized.get("errors") or [])
                   + list(dbt_normalized.get("errors") or [])
-                  + list(activations_normalized.get("errors") or []))
+                  + list(activations_normalized.get("errors") or [])
+                  + build_errors)
 
         return {
             "generated_at": utcnow_iso(),

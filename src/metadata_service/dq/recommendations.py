@@ -340,8 +340,10 @@ def _is_stale(last_sync: str | None, threshold_hours: int, now: datetime | None 
     return age_hours > threshold_hours
 
 
-def _parse_dt(value: str) -> datetime | None:
-    raw = value.strip()
+def _parse_dt(value) -> datetime | None:
+    # Connectors occasionally report timestamps as non-strings (e.g. epoch ints);
+    # coerce rather than crash — an unparseable value just means "not stale".
+    raw = str(value).strip()
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
     try:
