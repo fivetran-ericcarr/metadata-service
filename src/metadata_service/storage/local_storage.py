@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from ..models.common import snapshot_timestamp
 logger = logging.getLogger(__name__)
 
 _LATEST = "latest.json"
+# Only files shaped like snapshot timestamps count as snapshots — a stray
+# aliases.json or editor backup must not become drift's "previous" baseline.
+_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.json$")
 
 
 def _write_atomic(path: Path, payload: str) -> None:
@@ -44,9 +48,10 @@ def _write_atomic(path: Path, payload: str) -> None:
 
 
 class LocalStorage:
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, *, retain: int | None = None) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
+        self._retain = retain if retain and retain > 0 else None
 
     def write_snapshot(self, metadata: dict, snapshot_name: str | None = None) -> str:
         name = snapshot_name or snapshot_timestamp()
@@ -69,6 +74,7 @@ class LocalStorage:
         except OSError as exc:
             raise StorageError(f"Failed to write snapshot to {snapshot_path}: {exc}") from exc
 
+        self._prune()
         uri = str(snapshot_path.resolve())
         logger.info("Wrote snapshot: %s", uri)
         return uri
@@ -88,8 +94,20 @@ class LocalStorage:
 
     # -- internals --------------------------------------------------------
     def _snapshot_files(self) -> list[Path]:
-        files = [p for p in self._root.rglob("*.json") if p.name != _LATEST]
+        files = [p for p in self._root.rglob("*.json") if _SNAPSHOT_NAME.match(p.name)]
         return sorted(files, key=lambda p: p.name)
+
+    def _prune(self) -> None:
+        """Delete the oldest timestamped snapshots beyond the retention count."""
+        if self._retain is None:
+            return
+        files = self._snapshot_files()
+        for old in files[: max(0, len(files) - self._retain)]:
+            try:
+                old.unlink()
+                logger.info("Pruned old snapshot: %s", old)
+            except OSError as exc:  # never fail a build over cleanup
+                logger.warning("Could not prune snapshot %s: %s", old, exc)
 
     @staticmethod
     def _read(path: Path) -> dict | None:

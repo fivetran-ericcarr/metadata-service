@@ -110,9 +110,14 @@ def build_and_store(
     dbt_project_id: int | None = None,
     dbt_job_id: int | None = None,
     enrich_warehouse: bool = True,
+    write_latest: bool = True,
 ) -> dict:
     """Build metadata, attach drift vs. the previous snapshot, persist, and return
     a summary ``{status, snapshot_uri, generated_at, object_count, error_count, doc}``.
+
+    ``write_latest=False`` runs the full build (including drift vs. the current
+    baseline) but does NOT persist — ``snapshot_uri`` is None and the baseline
+    the MCP/REST readers serve is untouched.
 
     Raises :class:`RefreshInProgressError` if another build is already running in
     this process (REST maps it to 409).
@@ -140,7 +145,9 @@ def build_and_store(
             enrich_warehouse=enrich_warehouse,
         )
         doc["schema_drift"] = detect_drift(previous, doc)
-        uri = storage.write_snapshot(doc)
+        uri = storage.write_snapshot(doc) if write_latest else None
+        if not write_latest:
+            logger.info("Snapshot NOT persisted (write_latest=False); latest.json unchanged.")
     finally:
         _REFRESH_LOCK.release()
 
@@ -183,7 +190,10 @@ def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> None:
         updated = apply_primary_keys(fivetran_norm, pk_map)
         logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
     except Exception as exc:  # never fail the build on enrichment
-        logger.warning("Warehouse PK enrichment skipped: %s", exc)
+        # The reader was EXPLICITLY configured (warehouse_reader_enabled gated
+        # entry), so a silent skip means PKs quietly stop being authoritative —
+        # log at ERROR, not a warning nobody reads.
+        logger.error("Warehouse PK enrichment FAILED (reader is configured): %s", exc)
     finally:
         try:
             reader.close()

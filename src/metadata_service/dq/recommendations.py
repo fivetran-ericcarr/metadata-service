@@ -63,7 +63,7 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
             recs.append(_dbt_test(object_id, "unique", col_target, CONFIDENCE_HIGH,
                                   "Fivetran marks this column as a primary key."))
 
-    if composite_pk:
+    if composite_pk and not _has_combination_test(dbt_section):
         recs.append(_dbt_test(
             object_id, "dbt_utils.unique_combination_of_columns",
             {**target_base, "columns": [c.get("name") for c in pk_columns]},
@@ -82,7 +82,9 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
     # --- Freshness --------------------------------------------------------
     if dbt_section.get("source_unique_id"):
         freshness = dbt_section.get("freshness")
-        if not freshness or freshness.get("status") is None:
+        # "configured: True" means freshness IS set up but the sources.json
+        # artifact was missing this run — recommending it again would be false.
+        if not freshness or (freshness.get("status") is None and not freshness.get("configured")):
             recs.append({
                 "object_id": object_id,
                 "recommendation_type": "dbt_test",
@@ -301,6 +303,17 @@ def activation_risk(obj: dict, activations: list[dict]) -> dict | None:
 
 
 # -- helpers --------------------------------------------------------------
+def _has_combination_test(dbt_section: dict) -> bool:
+    """True when a unique_combination_of_columns test already exists on the
+    object. These tests have no attached_column, so per-column existence checks
+    can't see them — without this, the composite-PK rec refires forever."""
+    for test in dbt_section.get("tests") or []:
+        blob = f"{test.get('test_type') or ''} {test.get('name') or ''}".lower()
+        if "unique_combination_of_columns" in blob:
+            return True
+    return False
+
+
 def _dbt_test(object_id, test_name, target, confidence, reason) -> dict:
     return {
         "object_id": object_id,

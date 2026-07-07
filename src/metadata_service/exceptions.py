@@ -45,7 +45,11 @@ class DbtPermissionError(DbtError):
     """Authenticated but not permitted (HTTP 403)."""
 
 
-class DbtArtifactNotFoundError(DbtError):
+class DbtNotFoundError(DbtError):
+    """Requested resource not found (HTTP 404)."""
+
+
+class DbtArtifactNotFoundError(DbtNotFoundError):
     """Requested run artifact not found."""
 
 
@@ -60,6 +64,10 @@ class ActivationsError(MetadataServiceError):
 
 class ActivationsAuthError(ActivationsError):
     """Authentication failed (HTTP 401)."""
+
+
+class ActivationsRateLimitError(ActivationsError):
+    """Rate limit retries exhausted (HTTP 429)."""
 
 
 # --- Pipeline -------------------------------------------------------------

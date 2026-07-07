@@ -140,7 +140,11 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
         }
 
     upstream = {source_model_uid} | set(lineage.ancestors(source_model_uid))
-    upstream_models = [u for u in upstream if u.startswith("model.")]
+    # Snapshots appear in lineage (a model can depend on snapshot.*); include
+    # them in the model-style walk so their tests aren't silently dropped.
+    # (The dbt normalizer currently only extracts model tests, so an absent
+    # snapshot entry contributes nothing — but it is no longer filtered out.)
+    upstream_models = [u for u in upstream if u.startswith(("model.", "snapshot."))]
     upstream_sources = [u for u in upstream if u.startswith("source.")]
 
     reasons: list[dict] = []

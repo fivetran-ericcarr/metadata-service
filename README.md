@@ -74,12 +74,15 @@ Module layout (`src/` layout):
 ```text
 src/metadata_service/
   config.py logging_config.py exceptions.py pipeline.py cli.py
-  clients/      fivetran_client.py  dbt_client.py
-  extractors/   fivetran_extractor.py  dbt_extractor.py
+  clients/      fivetran_client.py  dbt_client.py  activations_client.py
+  extractors/   fivetran_extractor.py  dbt_extractor.py  activations_extractor.py
   models/       common.py fivetran.py dbt.py normalized.py
   normalizers/  fivetran_normalizer.py dbt_normalizer.py combined_normalizer.py
+                activations_normalizer.py
   storage/      base.py local_storage.py s3_storage.py
-  dq/           recommendations.py drift.py lineage.py
+  dq/           recommendations.py drift.py lineage.py column_lineage.py
+                activation_gate.py
+  warehouse/    base.py snowflake_reader.py   (Platform Connector PK reader)
   api/          main.py routes.py
   mcp/          server.py tools.py
 ```
@@ -129,12 +132,17 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `METADATA_STORAGE_BACKEND` | `local` or `s3` | `local` |
 | `METADATA_LOCAL_PATH` | Local snapshot dir | `./metadata_snapshots` |
 | `METADATA_S3_BUCKET` / `METADATA_S3_PREFIX` | S3 target | — / `metadata` |
+| `METADATA_RETENTION_SNAPSHOTS` | Keep at most N timestamped snapshots (unset = keep all) | — |
+| `METADATA_SERVICE_ENV_FILE` | Explicit path to the `.env` file (else CWD-relative `.env`) | — |
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `API_HOST` / `API_PORT` | FastAPI bind (loopback by default — set `0.0.0.0` + an API key to serve remotely) | `127.0.0.1` / `8080` |
 | `METADATA_API_KEY` | When set, every REST route except `/health` requires it (`X-API-Key` or `Authorization: Bearer`) | — |
 | `WAREHOUSE_TYPE` | Prefix for object ids (`warehouse://...`) | `warehouse` |
 | `WAREHOUSE_DATABASE` | Warehouse DB name (also scopes Activations to syncs reading it) | — |
 | `STALE_SYNC_THRESHOLD_HOURS` | Stale-sync risk threshold | `24` |
+| `WAREHOUSE_ACCOUNT` / `WAREHOUSE_USER` / `WAREHOUSE_ROLE` / `WAREHOUSE_NAME` | Snowflake connection for the Platform Connector PK reader | — |
+| `WAREHOUSE_METADATA_SCHEMA` | Schema holding `fivetran_metadata` | `fivetran_metadata` |
+| `WAREHOUSE_PRIVATE_KEY_PATH` / `WAREHOUSE_PRIVATE_KEY_PASSPHRASE` / `WAREHOUSE_PASSWORD` | Reader auth (key-pair, optionally passphrase-protected, or password) | — |
 | `ACTIVATIONS_API_TOKEN` | Fivetran Activations (Census) workspace token — enables the reverse-ETL readiness gate | — |
 | `ACTIVATIONS_BASE_URL` | Activations API base | `https://app.getcensus.com/api/v1` |
 

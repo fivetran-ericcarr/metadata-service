@@ -80,7 +80,8 @@ class FivetranClient:
             except httpx.HTTPError as exc:  # network / timeout
                 last_exc = exc
                 logger.warning("Fivetran request error (%s %s) attempt %s: %s", method, path, attempt, exc)
-                self._sleep(_BACKOFF_SECONDS * attempt)
+                if attempt < self._max_retries:
+                    self._sleep(_BACKOFF_SECONDS * attempt)
                 continue
 
             status = resp.status_code
@@ -100,7 +101,8 @@ class FivetranClient:
             if status >= 500:
                 last_exc = FivetranError(f"Fivetran server error {status} for {path}.")
                 logger.warning("Fivetran %s on %s attempt %s; retrying", status, path, attempt)
-                self._sleep(_BACKOFF_SECONDS * attempt)
+                if attempt < self._max_retries:
+                    self._sleep(_BACKOFF_SECONDS * attempt)
                 continue
             if status >= 400:
                 raise FivetranError(f"Unexpected Fivetran response {status} for {path}: {resp.text[:300]}")
@@ -117,23 +119,35 @@ class FivetranClient:
         payload = self._request("GET", path, params=params)
         return payload.get("data", payload)
 
-    def _get_paginated(self, path: str, params: dict | None = None) -> list[dict]:
-        """GET a cursor-paginated collection, returning all ``items``."""
+    def _get_paginated(self, path: str, params: dict | None = None,
+                       max_pages: int = 1000) -> list[dict]:
+        """GET a cursor-paginated collection, returning all ``items``.
+
+        Guards against pagination bugs: a cursor that repeats (would loop and
+        duplicate items forever) or more than ``max_pages`` pages stops the walk
+        with a warning rather than looping to OOM.
+        """
         items: list[dict] = []
         cursor: str | None = None
+        seen_cursors: set[str] = set()
         params = dict(params or {})
-        while True:
+        for _ in range(max_pages):
             page_params = dict(params)
             if cursor:
                 page_params["cursor"] = cursor
             data = self._get_data(path, params=page_params)
-            if isinstance(data, dict):
-                items.extend(data.get("items", []))
-                cursor = data.get("next_cursor")
-            else:  # pragma: no cover - defensive
-                break
+            if not isinstance(data, dict):  # pragma: no cover - defensive
+                return items
+            items.extend(data.get("items", []))
+            cursor = data.get("next_cursor")
             if not cursor:
-                break
+                return items
+            if cursor in seen_cursors:
+                logger.warning("Fivetran pagination repeated cursor on %s; stopping walk.", path)
+                return items
+            seen_cursors.add(cursor)
+        logger.warning("Fivetran pagination exceeded %s pages on %s; results may be truncated.",
+                       max_pages, path)
         return items
 
     # -- public API -------------------------------------------------------
@@ -165,10 +179,12 @@ class FivetranClient:
         return self._get_data(f"/metadata/connector-types/{quote(service, safe='')}")
 
 
-def _parse_retry_after(value: str | None, default: float = 2.0) -> float:
+def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
+    """Numeric Retry-After, clamped so one header can't stall a run for hours.
+    HTTP-date values fall back to the default."""
     if not value:
         return default
     try:
-        return float(value)
+        return max(0.0, min(float(value), max_seconds))
     except (TypeError, ValueError):
         return default

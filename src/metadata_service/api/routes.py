@@ -39,9 +39,17 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 class RefreshRequest(BaseModel):
+    """Accepts the same scoping as the CLI build, so a webhook/agent-triggered
+    refresh produces the SAME snapshot as the scheduled one (a broader refresh
+    would clobber the baseline and manufacture false drift)."""
+
     fivetran_group_id: str | None = None
     include_dbt: bool = True
     include_fivetran: bool = True
+    include_activations: bool = True
+    dbt_project_id: int | None = None
+    connected_only: bool = False
+    skip_paused: bool = False
 
 
 def _load_latest_or_404() -> dict:
@@ -66,6 +74,10 @@ def refresh_metadata(body: RefreshRequest) -> dict:
             group_id=body.fivetran_group_id,
             include_fivetran=body.include_fivetran,
             include_dbt=body.include_dbt,
+            include_activations=body.include_activations,
+            dbt_project_id=body.dbt_project_id,
+            connected_only=body.connected_only,
+            skip_paused=body.skip_paused,
         )
     except RefreshInProgressError as exc:
         raise HTTPException(status_code=409, detail="A refresh is already in progress.") from exc
@@ -108,9 +120,13 @@ def warehouse_objects(
 
 @router.get("/metadata/warehouse-objects/{object_id:path}")
 def warehouse_object(object_id: str) -> dict:
+    """Exact object_id, or a slash-delimited schema/table suffix. A bare-name
+    suffix used to match the first id merely ENDING in the string (asking for
+    "orders" could return "stg_orders") — bare names now 404 instead."""
     objects = _load_latest_or_404().get("warehouse_objects", [])
     for obj in objects:
-        if obj.get("object_id") == object_id or obj.get("object_id", "").endswith(object_id):
+        oid = obj.get("object_id") or ""
+        if oid == object_id or ("/" in object_id and oid.endswith("/" + object_id)):
             return obj
     raise HTTPException(status_code=404, detail=f"Warehouse object not found: {object_id}")
 

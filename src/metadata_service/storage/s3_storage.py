@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from ..exceptions import StorageError
 from ..models.common import snapshot_timestamp
@@ -17,12 +18,15 @@ from ..models.common import snapshot_timestamp
 logger = logging.getLogger(__name__)
 
 _LATEST = "latest.json"
+_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.json$")
 
 
 class S3Storage:
-    def __init__(self, bucket: str, prefix: str = "metadata", *, client=None) -> None:
+    def __init__(self, bucket: str, prefix: str = "metadata", *, client=None,
+                 retain: int | None = None) -> None:
         self._bucket = bucket
         self._prefix = prefix.strip("/")
+        self._retain = retain if retain and retain > 0 else None
         if client is not None:
             self._s3 = client
         else:
@@ -56,6 +60,7 @@ class S3Storage:
         except Exception as exc:  # boto ClientError etc.
             raise StorageError(f"Failed to write snapshot to s3://{self._bucket}/{snapshot_key}: {exc}") from exc
 
+        self._prune()
         uri = f"s3://{self._bucket}/{snapshot_key}"
         logger.info("Wrote snapshot: %s", uri)
         return uri
@@ -79,9 +84,21 @@ class S3Storage:
         for page in paginator.paginate(Bucket=self._bucket, Prefix=self._prefix):
             for obj in page.get("Contents", []) or []:
                 key = obj["Key"]
-                if key.endswith(".json") and not key.endswith(_LATEST):
+                if _SNAPSHOT_NAME.match(key.rsplit("/", 1)[-1]):
                     keys.append(key)
         return sorted(keys, key=lambda k: k.rsplit("/", 1)[-1])
+
+    def _prune(self) -> None:
+        """Delete the oldest timestamped snapshots beyond the retention count."""
+        if self._retain is None:
+            return
+        keys = self._snapshot_keys()
+        for old in keys[: max(0, len(keys) - self._retain)]:
+            try:
+                self._s3.delete_object(Bucket=self._bucket, Key=old)
+                logger.info("Pruned old snapshot: s3://%s/%s", self._bucket, old)
+            except Exception as exc:  # never fail a build over cleanup
+                logger.warning("Could not prune snapshot %s: %s", old, exc)
 
     def _read(self, key: str) -> dict | None:
         try:

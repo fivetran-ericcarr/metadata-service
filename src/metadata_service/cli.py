@@ -125,11 +125,18 @@ def build(
         help="Enrich PKs from the Fivetran Platform Connector's fivetran_metadata "
              "schema when WAREHOUSE_* is configured.",
     ),
-    write_latest: bool = typer.Option(True, "--write-latest/--no-write-latest"),
+    write_latest: bool | None = typer.Option(
+        None, "--write-latest/--no-write-latest",
+        help="Persist the snapshot as latest.json. Defaults to yes for live builds "
+             "and NO for --fixtures-dir builds (so an offline test never clobbers "
+             "the snapshot a running MCP/REST server is serving).",
+    ),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
     settings = get_settings()
     aliases = json.loads(Path(aliases_file).read_text(encoding="utf-8")) if aliases_file else None
+    if write_latest is None:
+        write_latest = not fixtures_dir
     result = build_and_store(
         settings,
         group_id=group_id,
@@ -143,12 +150,13 @@ def build(
         dbt_job_id=dbt_job_id,
         aliases=aliases,
         enrich_warehouse=warehouse_metadata,
+        write_latest=write_latest,
     )
     summary = {k: v for k, v in result.items() if k != "doc"}
     summary["drift_count"] = len(result["doc"].get("schema_drift", []))
     typer.echo(json.dumps(summary, indent=2, default=str))
     if not write_latest:
-        typer.echo("(snapshot was still written by the storage backend)")
+        typer.echo("(dry run: snapshot NOT persisted; latest.json unchanged)")
 
 
 @app.command()
@@ -194,7 +202,7 @@ def serve_api() -> None:
 
 @app.command("serve-mcp")
 def serve_mcp(
-    transport: str = typer.Option("stdio", "--transport", help="stdio | http | sse"),
+    transport: str | None = typer.Option(None, "--transport", help="stdio | http | sse (default: MCP_TRANSPORT or stdio)"),
     host: str | None = typer.Option(None, "--host", help="Bind host for HTTP transports."),
     port: int | None = typer.Option(None, "--port", help="Bind port for HTTP transports."),
 ) -> None:

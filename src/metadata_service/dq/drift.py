@@ -115,7 +115,8 @@ def _compare_tests(object_id: str, prev: dict, latest: dict) -> list[dict]:
         c_status = latest_tests[uid].get("status")
         if p_status != c_status:
             records.append(_record(object_id, "dbt_test_status_changed",
-                                   {"test": latest_tests[uid].get("name"), "from": p_status, "to": c_status}))
+                                   {"test": latest_tests[uid].get("name"), "from": p_status, "to": c_status},
+                                   severity=_status_change_severity(c_status)))
     return records
 
 
@@ -123,19 +124,26 @@ def _compare_freshness(object_id: str, prev: dict, latest: dict) -> list[dict]:
     p = ((prev.get("dbt") or {}).get("freshness") or {}).get("status")
     c = ((latest.get("dbt") or {}).get("freshness") or {}).get("status")
     if p != c:
-        return [_record(object_id, "freshness_status_changed", {"from": p, "to": c})]
+        return [_record(object_id, "freshness_status_changed", {"from": p, "to": c},
+                        severity=_status_change_severity(c))]
     return []
+
+
+def _status_change_severity(new_status) -> str:
+    """A status change is only high-severity when it changed INTO a bad state —
+    fail -> pass is an improvement, not a high-severity alert."""
+    return "high" if (str(new_status or "")).lower() in {"fail", "error", "warn", "runtime error"} else "low"
 
 
 def _index_objects(doc: dict) -> dict[str, dict]:
     return {obj.get("object_id"): obj for obj in doc.get("warehouse_objects") or [] if obj.get("object_id")}
 
 
-def _record(object_id: str, change_type: str, details: dict) -> dict:
+def _record(object_id: str, change_type: str, details: dict, severity: str | None = None) -> dict:
     return {
         "detected_at": utcnow_iso(),
         "object_id": object_id,
         "change_type": change_type,
-        "severity": SEVERITY.get(change_type, "medium"),
+        "severity": severity or SEVERITY.get(change_type, "medium"),
         "details": details,
     }
