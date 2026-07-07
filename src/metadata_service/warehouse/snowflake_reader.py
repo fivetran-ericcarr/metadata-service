@@ -49,18 +49,25 @@ class SnowflakeMetadataReader:
             database=self._s.warehouse_database,
         )
         if self._s.warehouse_private_key_path:
-            kwargs["private_key"] = self._load_private_key(self._s.warehouse_private_key_path)
+            kwargs["private_key"] = self._load_private_key(
+                self._s.warehouse_private_key_path,
+                passphrase=self._s.warehouse_private_key_passphrase,
+            )
         elif self._s.warehouse_password:
             kwargs["password"] = self._s.warehouse_password
         self._conn = sf.connect(**{k: v for k, v in kwargs.items() if v is not None})
         return self._conn
 
     @staticmethod
-    def _load_private_key(path: str) -> bytes:
+    def _load_private_key(path: str, passphrase: str | None = None) -> bytes:
+        """Load a PEM private key, optionally passphrase-protected
+        (WAREHOUSE_PRIVATE_KEY_PASSPHRASE) — the common security posture."""
         from cryptography.hazmat.primitives import serialization
 
         with open(path, "rb") as fh:
-            key = serialization.load_pem_private_key(fh.read(), password=None)
+            key = serialization.load_pem_private_key(
+                fh.read(), password=passphrase.encode() if passphrase else None
+            )
         return key.private_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PrivateFormat.PKCS8,

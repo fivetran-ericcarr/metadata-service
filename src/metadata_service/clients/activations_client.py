@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from ..config import Settings
-from ..exceptions import ActivationsAuthError, ActivationsError
+from ..exceptions import ActivationsAuthError, ActivationsError, ActivationsRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,20 @@ class ActivationsClient:
                 resp = self._client.get(path, params=params)
             except httpx.HTTPError as exc:
                 last = exc
-                self._sleep(attempt)
+                if attempt < self._max_retries:
+                    self._sleep(attempt)
                 continue
             if resp.status_code == 401:
                 raise ActivationsAuthError("Activations authentication failed (401).")
-            if resp.status_code == 429 or resp.status_code >= 500:
+            if resp.status_code == 429:
+                if attempt >= self._max_retries:
+                    raise ActivationsRateLimitError("Activations rate limit retries exhausted (429).")
+                self._sleep(_parse_retry_after(resp.headers.get("Retry-After"), default=float(attempt)))
+                continue
+            if resp.status_code >= 500:
                 last = ActivationsError(f"Activations {resp.status_code} for {path}.")
-                self._sleep(attempt)
+                if attempt < self._max_retries:
+                    self._sleep(attempt)
                 continue
             if resp.status_code >= 400:
                 raise ActivationsError(f"Activations {resp.status_code} for {path}: {resp.text[:200]}")
@@ -118,3 +125,13 @@ class ActivationsClient:
 
     def list_destinations(self) -> list[dict]:
         return self._list_paginated("/destinations")
+
+
+def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
+    """Numeric Retry-After, clamped; HTTP-date values fall back to the default."""
+    if not value:
+        return default
+    try:
+        return max(0.0, min(float(value), max_seconds))
+    except (TypeError, ValueError):
+        return default

@@ -88,21 +88,27 @@ class DbtExtractor:
         }
 
     def _download_from_recent_success(self, runs: list[dict], errors: list[dict]) -> dict:
-        """Walk recent runs (newest first) collecting artifacts until all found."""
-        artifacts: dict[str, dict] = {}
+        """Walk recent runs (newest first); use artifacts from ONE run only.
+
+        Mixing artifacts across runs (manifest from run A, catalog/run_results
+        from an older run B) pairs different code versions — node unique_ids stop
+        lining up in the normalizer. The first run that yields a manifest anchors
+        the whole artifact set; missing optional artifacts are simply absent, not
+        backfilled from other runs.
+        """
         # dbt status 10 == success; finished_at present indicates a completed run.
         candidates = [r for r in runs if str(r.get("status")) == "10" or r.get("status_humanized") == "Success"]
-        if not candidates:
+        fallback = not candidates
+        if fallback:
             candidates = [r for r in runs if r.get("finished_at")]
 
         for run in candidates:
             run_id = run.get("id")
             if run_id is None:
                 continue
+            artifacts: dict[str, dict] = {}
             for path in _ARTIFACT_PATHS:
                 key = _ARTIFACT_KEYS[path]
-                if key in artifacts:
-                    continue
                 try:
                     artifacts[key] = self._client.get_run_artifact(self._account_id, run_id, path)
                     logger.debug("Downloaded %s from run %s", path, run_id)
@@ -112,16 +118,24 @@ class DbtExtractor:
                 except DbtError as exc:
                     errors.append({"source": "dbt", "run_id": run_id, "artifact": path,
                                    "error_type": type(exc).__name__, "error_message": str(exc)})
-            if all(k in artifacts for k in ("manifest", "run_results")):
-                break
+            if "manifest" in artifacts:
+                if fallback:
+                    errors.append({
+                        "source": "dbt", "run_id": run_id,
+                        "error_type": "NonSuccessRunArtifacts",
+                        "error_message": f"No successful run found; artifacts taken from "
+                                         f"non-success run {run_id} "
+                                         f"(status={run.get('status_humanized') or run.get('status')}).",
+                    })
+                artifacts["artifacts_run_id"] = run_id  # provenance for the snapshot
+                return artifacts
 
-        if "manifest" not in artifacts:
-            errors.append({
-                "source": "dbt",
-                "error_type": "NoManifest",
-                "error_message": "Could not download manifest.json from any recent run.",
-            })
-        return artifacts
+        errors.append({
+            "source": "dbt",
+            "error_type": "NoManifest",
+            "error_message": "Could not download manifest.json from any recent run.",
+        })
+        return {}
 
     @staticmethod
     def _safe(fn, errors: list[dict], what: str):

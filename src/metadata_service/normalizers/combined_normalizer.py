@@ -30,8 +30,16 @@ class CombinedNormalizer:
         self._settings = settings
         self._warehouse = getattr(settings, "warehouse_type", "warehouse")
         self._stale_hours = getattr(settings, "stale_sync_threshold_hours", 24)
-        # aliases: {"dest_schema.dest_table": "dbt_schema.dbt_table"}
-        self._aliases = {k.lower(): v.lower() for k, v in (aliases or {}).items()}
+        # aliases: {"dest_schema.dest_table": "dbt_schema.dbt_table"}. Validate
+        # instead of crashing on a malformed entry (None value, missing dot):
+        # a bad config line should be a logged skip, not a dead service.
+        self._aliases: dict[str, str] = {}
+        for key, value in (aliases or {}).items():
+            if not isinstance(key, str) or not isinstance(value, str) or "." not in value:
+                logger.warning("Ignoring malformed alias %r -> %r "
+                               "(both sides must be '<schema>.<table>' strings).", key, value)
+                continue
+            self._aliases[key.lower()] = value.lower()
 
     def build(self, fivetran_normalized: dict, dbt_normalized: dict,
               activations_normalized: dict | None = None) -> dict:
@@ -82,12 +90,16 @@ class CombinedNormalizer:
                 warehouse_objects.append(obj)
                 all_recommendations.extend(recs)
 
-        metric_quality = self._build_metric_quality(metrics, warehouse_objects)
-
+        # Activations first: the gate escalates dq_summary.risk_level on objects
+        # feeding blocked syncs, and metric trust must be scored on the
+        # post-escalation posture (else a metric can read "trusted" while its
+        # upstream object is high risk in the same snapshot).
         activations = self._build_activations(
             activations_normalized, models, sources, lineage,
             warehouse_objects, all_recommendations,
         )
+
+        metric_quality = self._build_metric_quality(metrics, warehouse_objects)
 
         errors = (list(fivetran_normalized.get("errors") or [])
                   + list(dbt_normalized.get("errors") or [])
@@ -276,19 +288,26 @@ class CombinedNormalizer:
         }
 
     def _match(self, dest_schema, dest_table, index):
-        """Deterministic matching against a dbt index. Returns (obj, confidence, notes)."""
+        """Deterministic matching against a dbt index. Returns (obj, confidence, notes).
+
+        A configured alias is checked FIRST: aliases exist precisely to override
+        a name-based match that binds to the wrong dbt object, so they must be
+        able to beat an exact hit.
+        """
         if not dest_schema or not dest_table:
             return None, MATCH_UNMATCHED, ["missing destination schema/table"]
-
-        exact_key = (dest_schema, dest_table)
-        if exact_key in index["exact"]:
-            return index["exact"][exact_key], MATCH_EXACT_SCHEMA_TABLE, []
 
         alias_target = self._aliases.get(f"{dest_schema}.{dest_table}".lower())
         if alias_target:
             ci_key = tuple(alias_target.split(".", 1))
             if ci_key in index["ci"]:
                 return index["ci"][ci_key], MATCH_CONFIGURED_ALIAS, [f"alias -> {alias_target}"]
+            logger.warning("Alias target %r for %s.%s matches no dbt object; "
+                           "falling back to name matching.", alias_target, dest_schema, dest_table)
+
+        exact_key = (dest_schema, dest_table)
+        if exact_key in index["exact"]:
+            return index["exact"][exact_key], MATCH_EXACT_SCHEMA_TABLE, []
 
         ci_key = (dest_schema.lower(), dest_table.lower())
         if ci_key in index["ci"]:
@@ -515,7 +534,13 @@ class CombinedNormalizer:
 
 
 def _index_dbt(objects: list[dict], *, id_field: str, name_field: str) -> dict:
-    """Build exact and case-insensitive (schema, table) indexes for dbt objects."""
+    """Build exact and case-insensitive (schema, table) indexes for dbt objects.
+
+    Collisions (two dbt objects claiming the same schema+table — e.g. the same
+    relation declared in two source groups, or the same name in two databases)
+    keep the first entry but are logged: the loser's tests/freshness become
+    invisible to matching, which the operator should know about.
+    """
     exact: dict[tuple, dict] = {}
     ci: dict[tuple, dict] = {}
     for obj in objects:
@@ -523,6 +548,14 @@ def _index_dbt(objects: list[dict], *, id_field: str, name_field: str) -> dict:
         table = obj.get(id_field) or obj.get(name_field) or obj.get("name")
         if not schema or not table:
             continue
+        ci_key = (schema.lower(), table.lower())
+        existing = ci.get(ci_key)
+        if existing is not None and existing.get("unique_id") != obj.get("unique_id"):
+            logger.warning(
+                "dbt index collision on %s.%s: keeping %s, ignoring %s "
+                "(its tests/freshness will not attach to the matched object).",
+                schema, table, existing.get("unique_id"), obj.get("unique_id"),
+            )
         exact.setdefault((schema, table), obj)
-        ci.setdefault((schema.lower(), table.lower()), obj)
+        ci.setdefault(ci_key, obj)
     return {"exact": exact, "ci": ci}

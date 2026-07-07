@@ -55,14 +55,16 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         warn_test_failures: bool | None = None,
         stale: bool | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> dict:
         """Compact, filterable index of warehouse objects for triage (small rows,
         no columns/tests). Filter by schema, risk_level (low|medium|high),
         missing_coverage, failing_tests, warn_test_failures (warn-severity tests
-        firing while the run stays green), stale. get_warehouse_object for detail."""
+        firing while the run stays green), stale. limit+offset paginate.
+        get_warehouse_object for detail."""
         return tools.list_warehouse_objects(
             schema, risk_level, missing_coverage, failing_tests,
-            warn_test_failures, stale, limit
+            warn_test_failures, stale, limit, offset
         )
 
     # --- Detail -----------------------------------------------------------
@@ -103,11 +105,13 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         return tools.list_activations(verdict)
 
     @server.tool()
-    def get_activation_readiness(sync_id: str | None = None, label: str | None = None) -> dict:
+    def get_activation_readiness(sync_id: str | None = None, label: str | None = None,
+                                 schema: str | None = None, table: str | None = None) -> dict:
         """Readiness detail for one activation: verdict + upstream reasons
         (failing/warn tests, staleness, missing contract) + destination field
-        mappings. 'Is it safe to push this data back to prod?'"""
-        return tools.get_activation_readiness(sync_id, label)
+        mappings. Address by sync_id, label, or the warehouse schema+table the
+        sync reads. 'Is it safe to push this data back to prod?'"""
+        return tools.get_activation_readiness(sync_id, label, schema, table)
 
     @server.tool()
     def get_dq_recommendations(
@@ -117,12 +121,13 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         confidence: str | None = None,
         risk: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> dict:
         """DQ recommendations, filterable per-object (schema/table) or across the
         whole snapshot by recommendation_type (dbt_test|risk|signal),
-        confidence (high|medium|heuristic), or risk."""
+        confidence (high|medium|heuristic), or risk. limit+offset paginate."""
         return tools.get_dq_recommendations(
-            schema, table, recommendation_type, confidence, risk, limit
+            schema, table, recommendation_type, confidence, risk, limit, offset
         )
 
     @server.tool()
@@ -137,8 +142,10 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
     # --- Raw / bulk (use sparingly; large payloads) -----------------------
     @server.tool()
     def get_latest_metadata(scope: str = "all") -> dict:
-        """Return the full normalized snapshot. scope: all|fivetran|dbt|
-        warehouse_objects. Large — prefer get_dq_summary / list_warehouse_objects."""
+        """Snapshot by scope. all = joined doc with raw source payloads replaced
+        by counts (context-safe); fivetran|dbt = one raw section;
+        warehouse_objects = the join; full = the verbatim ~1 MB document.
+        Prefer get_dq_summary / list_warehouse_objects for triage."""
         return tools.get_latest_metadata(scope)
 
     # --- Action -----------------------------------------------------------
@@ -147,10 +154,15 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         fivetran_group_id: str | None = None,
         include_fivetran: bool = True,
         include_dbt: bool = True,
+        include_activations: bool = True,
+        dbt_project_id: int | None = None,
+        connected_only: bool = False,
+        skip_paused: bool = False,
     ) -> dict:
-        """Run extraction + normalization and write a new latest snapshot.
-        Long-running (minutes on live accounts); returns {status: in_progress_error}
-        if a build is already running."""
+        """Run extraction + normalization and write a new latest snapshot. Accepts
+        the same scoping as the CLI build (group, dbt project, filters) so an
+        agent-triggered refresh matches the scheduled one. Long-running (minutes
+        on live accounts); returns {status: in_progress_error} if already running."""
         import anyio
 
         from ..exceptions import RefreshInProgressError
@@ -159,7 +171,10 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
             # Extraction takes minutes; run it in a worker thread so one refresh
             # doesn't freeze every other session on the HTTP transports.
             return await anyio.to_thread.run_sync(
-                lambda: tools.refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)
+                lambda: tools.refresh_metadata(
+                    fivetran_group_id, include_fivetran, include_dbt,
+                    include_activations, dbt_project_id, connected_only, skip_paused,
+                )
             )
         except RefreshInProgressError:
             return {"status": "in_progress_error",

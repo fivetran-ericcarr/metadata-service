@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (medium/low review-finding cleanup)
+- **Clients**: Fivetran cursor pagination guards against repeated cursors and
+  caps pages (no infinite loop/OOM); Retry-After clamped to 60s (HTTP-dates fall
+  back); no client sleeps after its final attempt. dbt honors `Retry-After` on
+  429, raises a generic `DbtNotFoundError` on non-artifact 404s (artifact
+  endpoint still maps to `DbtArtifactNotFoundError`), refuses to send an empty
+  Discovery bearer token, paginates `list_runs` past the Admin API's 100 cap,
+  and logs when the `_paginate` safety cap truncates. Activations raises a typed
+  `ActivationsRateLimitError` and honors Retry-After.
+- **dbt artifacts are anchored to a single run** — mixing manifest/run_results
+  across runs paired different code versions (unique_ids stopped lining up);
+  the anchoring run id is recorded as `artifacts_run_id` and a non-success
+  fallback run is flagged in `errors[]`.
+- **Combined matching**: a configured alias now overrides an exact name match
+  (aliases exist to correct wrong bindings); malformed aliases are skipped with
+  a warning instead of crashing; index collisions (two dbt objects claiming the
+  same schema+table) are logged.
+- **Metric trust is scored after activation escalation** — previously a metric
+  could read `trusted` while its upstream object was `high` risk in the same
+  snapshot.
+- **Recommendations**: the source-freshness rec no longer fires for sources
+  whose freshness is configured but unrun (missing sources.json); the
+  composite-PK rec stops refiring once a `unique_combination_of_columns` test
+  exists.
+- **Drift**: a test/freshness status change is high severity only when the new
+  status is bad — `fail → pass` is `low`, not a high-severity alert.
+- **Surfaces**: `POST /metadata/refresh` and the MCP `refresh_metadata` tool
+  accept the same scoping as the CLI build (`dbt_project_id`,
+  `include_activations`, `connected_only`, `skip_paused`) so triggered refreshes
+  match scheduled ones; `get_activation_readiness` also addresses by
+  `schema`+`table`; `get_schema_drift(table=…)` without `schema` now matches
+  (previously built an impossible filter); `list_warehouse_objects` and
+  `get_dq_recommendations` gain `offset`; `get_latest_metadata(scope="all")`
+  returns the joined doc with raw source payloads replaced by counts
+  (`scope="full"` keeps the verbatim ~1 MB document);
+  `GET /metadata/warehouse-objects/{id}` requires a slash-delimited suffix
+  (a bare name no longer matches the first id that merely ends with it);
+  `--no-write-latest` actually skips persisting (and `--fixtures-dir` builds
+  default to NOT clobbering the `latest.json` a running server serves);
+  `MCP_TRANSPORT` is honored by `serve-mcp` (was dead).
+- **Storage**: `METADATA_RETENTION_SNAPSHOTS` prunes the oldest timestamped
+  snapshots after each write (local + S3); only files shaped like snapshot
+  timestamps count as snapshots (a stray `aliases.json` can no longer become
+  drift's baseline).
+- **Config/warehouse**: `METADATA_SERVICE_ENV_FILE` pins the `.env` location for
+  processes launched with an arbitrary CWD; `WAREHOUSE_PRIVATE_KEY_PASSPHRASE`
+  supports encrypted Snowflake keys; a configured-but-failing PK enrichment now
+  logs at ERROR; snapshot readers warn on schema-version mismatch.
+- **Tests**: +28 covering the previously-untested modules the review flagged —
+  Fivetran/dbt/Activations client retry+pagination via mocked transports, S3
+  storage (stubbed boto), the Snowflake reader query fold + encrypted-key load,
+  CLI (`CliRunner`), and the MCP server tool bindings. 130 total.
+
 ### Security / Hardening
 - **REST API auth + loopback defaults.** `API_HOST` and `MCP_HOST` now default to
   `127.0.0.1` (the snapshot is a full warehouse inventory — schemas, PII-signal

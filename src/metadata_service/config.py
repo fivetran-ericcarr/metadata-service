@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -13,10 +14,15 @@ class Settings(BaseSettings):
 
     Values are read from environment variables (and a local ``.env`` file when
     present). Secrets are never hardcoded and never logged.
+
+    The ``.env`` path resolves relative to the process CWD; when the service is
+    launched from elsewhere (e.g. an MCP client spawning it), either pin the
+    working directory (``uv run --directory ...``) or point
+    ``METADATA_SERVICE_ENV_FILE`` at the file explicitly.
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.environ.get("METADATA_SERVICE_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -47,6 +53,11 @@ class Settings(BaseSettings):
     )
     metadata_s3_bucket: str | None = Field(default=None, alias="METADATA_S3_BUCKET")
     metadata_s3_prefix: str = Field(default="metadata", alias="METADATA_S3_PREFIX")
+    # Keep at most N timestamped snapshots (latest.json is never pruned).
+    # None/0 keeps everything (an hourly refresh otherwise grows unbounded).
+    metadata_retention_snapshots: int | None = Field(
+        default=None, alias="METADATA_RETENTION_SNAPSHOTS"
+    )
 
     # --- Service ----------------------------------------------------------
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -82,6 +93,9 @@ class Settings(BaseSettings):
     )
     warehouse_private_key_path: str | None = Field(
         default=None, alias="WAREHOUSE_PRIVATE_KEY_PATH"
+    )
+    warehouse_private_key_passphrase: str | None = Field(
+        default=None, alias="WAREHOUSE_PRIVATE_KEY_PASSPHRASE"
     )
     warehouse_password: str | None = Field(default=None, alias="WAREHOUSE_PASSWORD")
 

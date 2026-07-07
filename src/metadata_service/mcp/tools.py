@@ -9,15 +9,24 @@ exposed.
 
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings, get_settings
+from ..models.common import SCHEMA_VERSION
 from ..pipeline import build_and_store
 from ..storage.base import get_storage
+
+logger = logging.getLogger(__name__)
 
 
 def _latest(settings: Settings) -> dict:
     latest = get_storage(settings).read_latest()
     if latest is None:
         raise RuntimeError("No metadata snapshot found. Call refresh_metadata first.")
+    version = latest.get("version")
+    if version != SCHEMA_VERSION:
+        logger.warning("Snapshot schema version %r differs from the reader's %r; "
+                       "fields added since then read as empty defaults.", version, SCHEMA_VERSION)
     return latest
 
 
@@ -25,14 +34,25 @@ def refresh_metadata(
     fivetran_group_id: str | None = None,
     include_fivetran: bool = True,
     include_dbt: bool = True,
+    include_activations: bool = True,
+    dbt_project_id: int | None = None,
+    connected_only: bool = False,
+    skip_paused: bool = False,
     settings: Settings | None = None,
 ) -> dict:
+    """Rebuild the snapshot. Accepts the same scoping as the CLI build — an
+    agent-triggered refresh should produce the SAME snapshot as the scheduled
+    one, or drift/scope semantics fall apart."""
     settings = settings or get_settings()
     result = build_and_store(
         settings,
         group_id=fivetran_group_id,
         include_fivetran=include_fivetran,
         include_dbt=include_dbt,
+        include_activations=include_activations,
+        dbt_project_id=dbt_project_id,
+        connected_only=connected_only,
+        skip_paused=skip_paused,
     )
     return {
         "status": result["status"],
@@ -42,6 +62,10 @@ def refresh_metadata(
 
 
 def get_latest_metadata(scope: str = "all", settings: Settings | None = None) -> dict:
+    """Snapshot access by scope. ``all`` returns the joined document with the
+    raw per-source payloads replaced by counts (they dominate the ~1 MB size and
+    blow agent context); use ``fivetran``/``dbt`` for a raw section or ``full``
+    for the verbatim document."""
     settings = settings or get_settings()
     doc = _latest(settings)
     if scope == "fivetran":
@@ -50,7 +74,17 @@ def get_latest_metadata(scope: str = "all", settings: Settings | None = None) ->
         return doc.get("sources", {}).get("dbt", {})
     if scope == "warehouse_objects":
         return {"warehouse_objects": doc.get("warehouse_objects", [])}
-    return doc
+    if scope == "full":
+        return doc
+    slim = {k: v for k, v in doc.items() if k != "sources"}
+    sources = doc.get("sources", {})
+    slim["sources"] = {
+        name: {"extracted_at": (section or {}).get("extracted_at"),
+               "sizes": {k: len(v) for k, v in (section or {}).items() if isinstance(v, list)},
+               "hint": f"use get_latest_metadata(scope='{name}') for the raw section"}
+        for name, section in sources.items()
+    }
+    return slim
 
 
 def get_warehouse_object(schema: str, table: str, settings: Settings | None = None) -> dict:
@@ -69,6 +103,7 @@ def get_dq_recommendations(
     confidence: str | None = None,
     risk: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
     settings: Settings | None = None,
 ) -> dict:
     """DQ recommendations, filterable per-object or across the whole snapshot.
@@ -92,9 +127,10 @@ def get_dq_recommendations(
     if risk:
         recs = [r for r in recs if r.get("risk") == risk]
     total = len(recs)
+    recs = recs[offset:]
     if limit is not None:
         recs = recs[:limit]
-    return {"count": total, "returned": len(recs), "recommendations": recs}
+    return {"count": total, "returned": len(recs), "offset": offset, "recommendations": recs}
 
 
 def _stale_object_ids(doc: dict) -> set[str]:
@@ -113,6 +149,7 @@ def list_warehouse_objects(
     warn_test_failures: bool | None = None,
     stale: bool | None = None,
     limit: int | None = None,
+    offset: int = 0,
     settings: Settings | None = None,
 ) -> dict:
     """Compact, filterable index of warehouse objects for agent triage.
@@ -163,9 +200,10 @@ def list_warehouse_objects(
             "is_stale": is_stale,
         })
     total = len(rows)
+    rows = rows[offset:]
     if limit is not None:
         rows = rows[:limit]
-    return {"count": total, "returned": len(rows), "objects": rows}
+    return {"count": total, "returned": len(rows), "offset": offset, "objects": rows}
 
 
 def get_impact(schema: str, table: str, settings: Settings | None = None) -> dict:
@@ -295,18 +333,35 @@ def list_activations(
 
 
 def get_activation_readiness(sync_id: str | int | None = None, label: str | None = None,
+                             schema: str | None = None, table: str | None = None,
                              settings: Settings | None = None) -> dict:
     """Full readiness detail for one activation: verdict + the upstream reasons
     (failing tests, warn-severity failures, staleness, missing contract) and the
-    field mappings pushed to the destination. 'Is it safe to sync this to prod?'"""
+    field mappings pushed to the destination. Address by ``sync_id``, ``label``,
+    or the warehouse ``schema``+``table`` the sync reads. 'Safe to sync to prod?'"""
     settings = settings or get_settings()
     syncs = _latest(settings).get("activations", {}).get("syncs", [])
+    matches: list[dict] = []
     for s in syncs:
         if sync_id is not None and str(s.get("sync_id")) == str(sync_id):
             return s
         if label and (s.get("label") or "").lower() == label.lower():
             return s
-    return {"found": False, "message": f"No activation for sync_id={sync_id!r} label={label!r}."}
+        if table:
+            obj = s.get("source_object") or {}
+            if ((obj.get("table_name") or "").lower() == table.lower()
+                    and (not schema or (obj.get("table_schema") or "").lower() == schema.lower())):
+                matches.append(s)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        return {"found": False,
+                "message": f"{len(matches)} activations read {schema or '*'}.{table}; "
+                           "disambiguate by sync_id.",
+                "candidates": [{"sync_id": m.get("sync_id"), "label": m.get("label")} for m in matches]}
+    return {"found": False,
+            "message": f"No activation for sync_id={sync_id!r} label={label!r} "
+                       f"schema={schema!r} table={table!r}."}
 
 
 def get_dq_summary(settings: Settings | None = None) -> dict:
@@ -377,8 +432,18 @@ def get_schema_drift(
     doc = _latest(settings)
     drift = doc.get("schema_drift", [])
     if schema or table:
-        target = f"/{(schema or '').lower()}/{(table or '').lower()}"
-        drift = [d for d in drift if target in (d.get("object_id") or "").lower()]
+        def _matches(d: dict) -> bool:
+            # object_id: warehouse://<db>/<schema>/<table>
+            parts = (d.get("object_id") or "").lower().split("/")
+            if len(parts) < 2:
+                return False
+            obj_schema, obj_table = parts[-2], parts[-1]
+            if schema and obj_schema != schema.lower():
+                return False
+            if table and obj_table != table.lower():
+                return False
+            return True
+        drift = [d for d in drift if _matches(d)]
     if severity:
         drift = [d for d in drift if d.get("severity") == severity]
     return {"count": len(drift), "drift": drift}

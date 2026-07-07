@@ -20,6 +20,7 @@ from ..exceptions import (
     DbtArtifactNotFoundError,
     DbtAuthError,
     DbtError,
+    DbtNotFoundError,
     DbtPermissionError,
     DbtRateLimitError,
 )
@@ -84,7 +85,8 @@ class DbtClient:
             except httpx.HTTPError as exc:
                 last_exc = exc
                 logger.warning("dbt request error (%s %s) attempt %s: %s", method, path, attempt, exc)
-                self._sleep(_BACKOFF_SECONDS * attempt)
+                if attempt < self._max_retries:
+                    self._sleep(_BACKOFF_SECONDS * attempt)
                 continue
 
             status = resp.status_code
@@ -93,15 +95,19 @@ class DbtClient:
             if status == 403:
                 raise DbtPermissionError(f"dbt permission denied (403) for {path}.")
             if status == 404:
-                raise DbtArtifactNotFoundError(f"dbt resource not found (404): {path}.")
+                raise DbtNotFoundError(f"dbt resource not found (404): {path}.")
             if status == 429:
                 if attempt >= self._max_retries:
                     raise DbtRateLimitError("dbt rate limit retries exhausted (429).")
-                self._sleep(_BACKOFF_SECONDS * attempt * 2)
+                retry_after = _parse_retry_after(resp.headers.get("Retry-After"),
+                                                 default=_BACKOFF_SECONDS * attempt * 2)
+                logger.warning("dbt rate limited (429); sleeping %.1fs", retry_after)
+                self._sleep(retry_after)
                 continue
             if status >= 500:
                 last_exc = DbtError(f"dbt server error {status} for {path}.")
-                self._sleep(_BACKOFF_SECONDS * attempt)
+                if attempt < self._max_retries:
+                    self._sleep(_BACKOFF_SECONDS * attempt)
                 continue
             if status >= 400:
                 raise DbtError(f"Unexpected dbt response {status} for {path}: {resp.text[:300]}")
@@ -141,7 +147,11 @@ class DbtClient:
             total = None
             if isinstance(payload, dict):
                 total = ((payload.get("extra") or {}).get("pagination") or {}).get("total_count")
-            if not data or len(data) < page_size or (total is not None and offset >= total) or offset >= cap:
+            if not data or len(data) < page_size or (total is not None and offset >= total):
+                break
+            if offset >= cap:
+                logger.warning("dbt pagination hit the %s-record safety cap on %s; "
+                               "results are truncated.", cap, path)
                 break
         return out
 
@@ -173,12 +183,24 @@ class DbtClient:
         project_id: int | None = None,
         limit: int = 100,
     ) -> list[dict]:
-        params: dict[str, Any] = {"limit": limit, "order_by": "-finished_at"}
+        """Most-recent runs first. The Admin API caps page size at 100, so larger
+        ``limit`` values are collected across offset pages (previously a >100
+        limit was passed straight through and rejected/capped by the API)."""
+        params: dict[str, Any] = {"order_by": "-finished_at"}
         if job_id:
             params["job_definition_id"] = job_id
         if project_id:
             params["project_id"] = project_id
-        return self._data(self._get_json(f"/v2/accounts/{account_id}/runs/", params=params)) or []
+        out: list[dict] = []
+        offset = 0
+        while len(out) < limit:
+            page_params = dict(params, limit=min(100, limit - len(out)), offset=offset)
+            data = self._data(self._get_json(f"/v2/accounts/{account_id}/runs/", params=page_params)) or []
+            out.extend(data)
+            if len(data) < page_params["limit"]:
+                break
+            offset += len(data)
+        return out[:limit]
 
     def get_run(self, account_id: str, run_id: int) -> dict:
         return self._data(self._get_json(f"/v2/accounts/{account_id}/runs/{run_id}/")) or {}
@@ -190,11 +212,18 @@ class DbtClient:
         The artifact endpoint rejects ``Accept: application/json`` with a 406, so we
         override the Accept header to ``*/*`` for this request only.
         """
-        resp = self._request(
-            "GET",
-            f"/v2/accounts/{account_id}/runs/{run_id}/artifacts/{path}",
-            headers={"Accept": "*/*"},
-        )
+        try:
+            resp = self._request(
+                "GET",
+                f"/v2/accounts/{account_id}/runs/{run_id}/artifacts/{path}",
+                headers={"Accept": "*/*"},
+            )
+        except DbtArtifactNotFoundError:
+            raise
+        except DbtNotFoundError as exc:
+            raise DbtArtifactNotFoundError(
+                f"dbt artifact {path} not found for run {run_id}."
+            ) from exc
         try:
             return resp.json()
         except ValueError as exc:
@@ -212,6 +241,8 @@ class DbtClient:
         url = self._settings.dbt_metadata_api_url
         if not url:
             raise DbtError("Discovery API not configured (DBT_METADATA_API_URL is unset).")
+        if not self._settings.dbt_service_token:
+            raise DbtAuthError("Discovery API requires DBT_SERVICE_TOKEN (would send an empty Bearer token).")
         headers = {
             "Authorization": f"Bearer {self._settings.dbt_service_token}",
             "Content-Type": "application/json",
@@ -223,3 +254,13 @@ class DbtClient:
         if resp.status_code >= 400:
             raise DbtError(f"dbt Discovery API error {resp.status_code}: {resp.text[:300]}")
         return resp.json()
+
+
+def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
+    """Numeric Retry-After, clamped; HTTP-date values fall back to the default."""
+    if not value:
+        return default
+    try:
+        return max(0.0, min(float(value), max_seconds))
+    except (TypeError, ValueError):
+        return default
