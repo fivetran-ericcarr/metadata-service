@@ -1,0 +1,44 @@
+# Example DQ policy. Rules read documented snapshot-contract fields only
+# (see the metadata-service ARTIFACTS.md).
+
+[policy]
+name = "example-prod-gate"
+
+[rules.snapshot_freshness]
+# A gate is only as good as its facts: refuse to decide on stale metadata.
+enabled = true
+max_age_hours = 24
+
+[rules.no_failing_tests]
+enabled = true
+# Warn-severity tests with failing rows leave the dbt run green but are still
+# bad data — count them (this is the reverse-ETL trap the gate exists for).
+include_warn_firing = true
+
+[rules.max_high_risk_objects]
+enabled = true
+threshold = 0
+# schemas = ["retail"]        # optionally scope to the schemas this team owns
+
+[rules.min_dbt_coverage]
+enabled = true
+min_matched_pct = 5           # toy threshold; a real team ratchets this up
+
+[rules.no_stale_objects]
+enabled = true
+
+[rules.activation_gate]
+# Reverse-ETL syncs must be cleared by the metadata-service readiness gate.
+enabled = true
+allowed_verdicts = ["allow"]  # add "warn" to tolerate governance gaps
+
+[rules.no_unwaived_pii]
+enabled = false               # enable to force explicit waivers for PII columns
+
+# Waivers: explicit, targeted, attributed, expiring. An expired waiver stops
+# working and shows up in the report as [STALE].
+# [[waivers]]
+# rule = "activation_gate"
+# target = "3580269"                # sync_id, "schema.table", or "*"
+# reason = "JIRA-123: dupes fixed upstream, backfill lands Friday"
+# expires = 2026-08-01

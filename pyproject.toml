@@ -43,5 +43,5 @@ metadata-service = "metadata_service.cli:app"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples/dq_middleware/tests"]
 pythonpath = ["src"]

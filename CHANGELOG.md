@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `examples/dq_middleware/` — a functionally complete toy **DQ policy
+  middleware** demonstrating how a DQaaS platform consumes the snapshot
+  contract: a TOML policy engine (7 rules over `dq_summary`, risks, coverage,
+  staleness, snapshot age, and activation readiness) with **expiring,
+  attributed waivers**; a CI-gate CLI (`evaluate` / `gate-activation`, exit
+  codes 0/1); and a decision API (`/gate/deploy`, `/gate/activations/{sync}`,
+  `/decisions`). Everything fails closed: stale snapshot → FAIL, unknown sync →
+  deny, unreadable facts → 503. Its tests build a real snapshot from the repo
+  fixtures through the actual pipeline, doubling as a consumer-side contract
+  guard (collected by the main suite; 141 tests total). Verified against the
+  live snapshot: the deploy gate fails on the warn-firing tests and the blocked
+  churn activation, and `gate-activation customer_churn` returns deny with the
+  upstream reason.
+
 ### Changed (medium/low review-finding cleanup)
 - **Clients**: Fivetran cursor pagination guards against repeated cursors and
   caps pages (no infinite loop/OOM); Retry-After clamped to 60s (HTTP-dates fall

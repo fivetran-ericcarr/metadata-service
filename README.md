@@ -7,7 +7,8 @@ metadata pipeline plus optional REST and MCP interfaces.
 
 > **New here?** Start with the **[Capgemini DQaaS Quickstart & Solution Guide](docs/capgemini-quickstart.md)**
 > — what it does, how agents use it, and where it fits — then the runnable
-> **[examples/](examples/)** (agent client, REST, offline demo).
+> **[examples/](examples/)** (agent client, REST, offline demo, and a
+> [DQ policy middleware](examples/dq_middleware/) consuming the snapshot contract).
 >
 > **Live reference builds:**
 > - [docs/use-cases/github-snowflake-dbt.md](docs/use-cases/github-snowflake-dbt.md)

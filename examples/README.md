@@ -6,6 +6,7 @@ Runnable starting points for consuming the metadata service.
 |---|---|---|
 | [`agent_quickstart.py`](agent_quickstart.py) | A minimal **MCP agent** running the triage flow: orient → find gaps → drill in → act | `pip install -e ".[mcp]"` + a snapshot |
 | [`rest_quickstart.sh`](rest_quickstart.sh) | The same metadata over the **REST API** (curl) | `metadata-service serve-api` |
+| [`dq_middleware/`](dq_middleware/) | A toy **DQ policy middleware** consuming the snapshot contract: TOML policies + expiring waivers, a CI gate CLI (exit codes), a decision API (`/gate/deploy`, `/gate/activations/{sync}`), all fail-closed | a snapshot (fixtures work) |
 | [`demo.sh`](demo.sh) | A self-contained **offline demo** (fixtures, no credentials) — ideal for screen recording | `pip install -e ".[dev,mcp]"` |
 | [`agent_transcript.md`](agent_transcript.md) | A read-through **agent chat** answering real DQ questions with tool calls + answers (demo data) | — |
 | [`aliases.example.json`](aliases.example.json) | Sample alias map for `build --aliases-file` | — |
