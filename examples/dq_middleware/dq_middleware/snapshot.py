@@ -8,7 +8,9 @@ on the plain dict.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -30,15 +32,22 @@ def load_snapshot(source: str, api_key: str | None = None, timeout: float = 30.0
         url = source if source.rstrip("/").endswith("/metadata/latest") \
             else source.rstrip("/") + "/metadata/latest"
         headers = {"X-API-Key": api_key} if api_key else {}
+        host = urlsplit(url).hostname or ""
+        if api_key and url.startswith("http://") and host not in ("localhost", "127.0.0.1", "::1"):
+            warnings.warn(f"Sending the API key over unencrypted http:// to {host} — use https.",
+                          stacklevel=2)
         try:
-            resp = httpx.get(url, headers=headers, timeout=timeout)
+            resp = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
         except httpx.HTTPError as exc:
             raise SnapshotError(f"Could not reach metadata-service at {url}: {exc}") from exc
         if resp.status_code == 401:
             raise SnapshotError("metadata-service rejected the API key (401). Set --api-key.")
         if resp.status_code != 200:
             raise SnapshotError(f"metadata-service returned {resp.status_code} for {url}.")
-        doc = resp.json()
+        try:
+            doc = resp.json()
+        except ValueError as exc:
+            raise SnapshotError(f"metadata-service returned a non-JSON body for {url}: {exc}") from exc
     else:
         path = Path(source)
         if not path.exists():

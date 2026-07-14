@@ -6,12 +6,22 @@ sync, a blocked activation), so the default policy MUST fail — that's the demo
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+import copy
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from dq_middleware.engine import FAIL, PASS, WAIVED, Policy, Waiver, evaluate, gate_activation
-from dq_middleware.snapshot import SnapshotError, load_snapshot
+from dq_middleware.engine import (
+    FAIL,
+    PASS,
+    WAIVED,
+    Policy,
+    PolicyError,
+    Waiver,
+    evaluate,
+    gate_activation,
+)
+from dq_middleware.snapshot import EXPECTED_VERSION, SnapshotError, load_snapshot
 
 
 def _now(snapshot) -> datetime:
@@ -158,3 +168,155 @@ def test_cli_exit_codes(snapshot_path, policy_path):
                                  "--policy", str(policy_path)])
     assert result.exit_code == 1
     assert '"deny"' in result.output
+
+    # unreadable facts are a distinct exit code (2), not a fake FAIL
+    result = runner.invoke(app, ["evaluate", "--snapshot", "/nonexistent/latest.json",
+                                 "--policy", str(policy_path)])
+    assert result.exit_code == 2
+
+
+# -- policy validation (a config mistake must not silently change the gate) -------
+@pytest.mark.parametrize("toml_text, message", [
+    ('[rules.no_failing_test]\nenabled = true\n', "Unknown rule"),
+    ('[rules.no_failing_tests]\nenabled = true\ninclude_warn = true\n', "Unknown option"),
+    ('[rules.max_high_risk_objects]\nenabled = true\nschemas = "retail"\n',
+     "list of schema names"),
+    ('[rules.snapshot_freshness]\nenabled = true\nmax_age_hours = "one day"\n',
+     "number of hours"),
+    ('[rules]\nno_failing_tests = true\n', "must be a table"),
+    ('[rules.no_failing_tests]\nenabled = "yes"\n', "true or false"),
+    ('[rules.no_failing_tests]\nenabled = false\n', "enables no rules"),
+    ('[rules.no_failing_tests]\nenabled = true\n'
+     '[[waivers]]\nrule = "activation_gate"\ntarget = "900"\nexpires = "2026-08-01"\n',
+     "unquoted TOML date"),
+    ('[rules.no_failing_tests]\nenabled = true\n'
+     '[[waivers]]\nrule = "no_such_rule"\ntarget = "*"\n', "not a known rule"),
+    ('rules = [unclosed\n', "Invalid TOML"),
+])
+def test_policy_validation_fails_closed(tmp_path, toml_text, message):
+    bad = tmp_path / "policy.toml"
+    bad.write_text(toml_text)
+    with pytest.raises(PolicyError, match=message):
+        Policy.from_toml(bad)
+
+
+def test_default_policy_toml_is_valid(policy_path):
+    assert Policy.from_toml(policy_path).rules  # the shipped example passes its own validation
+
+
+# -- freshness hardening ------------------------------------------------------------
+def test_freshness_accepts_naive_timestamp_as_utc(policy_path):
+    doc = {"generated_at": "2026-06-25T12:34:56", "warehouse_objects": []}  # no tz
+    report = evaluate(doc, Policy.from_toml(policy_path),
+                      now=datetime(2026, 6, 25, 13, 0, tzinfo=timezone.utc))
+    assert _result(report, "snapshot_freshness")["status"] == PASS  # 25min old, no crash
+
+
+def test_freshness_rejects_future_timestamp(policy_path):
+    doc = {"generated_at": "2026-08-01T00:00:00Z", "warehouse_objects": []}
+    report = evaluate(doc, Policy.from_toml(policy_path),
+                      now=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    fresh = _result(report, "snapshot_freshness")
+    assert fresh["status"] == FAIL
+    assert "future" in fresh["evidence"][0]["detail"]
+
+
+# -- waiver/threshold semantics ------------------------------------------------------
+def _high_risk_doc(*names):
+    return {"generated_at": "2026-07-01T00:00:00Z",
+            "warehouse_objects": [{"schema": "s", "name": n,
+                                   "dq_summary": {"risk_level": "high"}} for n in names]}
+
+
+def test_threshold_counts_only_unwaived_objects():
+    now = datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc)
+    rules = {"max_high_risk_objects": {"enabled": True, "threshold": 1}}
+    doc = _high_risk_doc("a", "b")
+
+    # 2 unwaived > threshold 1 -> FAIL
+    assert _result(evaluate(doc, Policy(rules=rules), now=now),
+                   "max_high_risk_objects")["status"] == FAIL
+
+    # 1 waived + 1 tolerated by the threshold -> not a failure, waiver consumed
+    policy = Policy(rules=rules,
+                    waivers=[Waiver(rule="max_high_risk_objects", target="s.a", reason="JIRA-3")])
+    report = evaluate(doc, policy, now=now)
+    assert _result(report, "max_high_risk_objects")["status"] == WAIVED
+    assert not report["unused_waivers"]  # the waiver did real work; don't tell anyone to delete it
+
+
+def test_targeted_waiver_beats_wildcard(snapshot, policy_path):
+    policy = Policy.from_toml(policy_path)
+    policy.waivers = [Waiver(rule="activation_gate", target="*", reason="broad freeze"),
+                      Waiver(rule="activation_gate", target="900", reason="JIRA-9")]
+    report = evaluate(snapshot, policy, now=_now(snapshot))
+    gate = _result(report, "activation_gate")
+    assert gate["waived"][0]["waiver_reason"] == "JIRA-9"  # attribution stays targeted
+    assert not any(u["target"] == "900" for u in report["unused_waivers"])
+
+
+# -- activation pre-flight hardening ---------------------------------------------------
+def test_gate_activation_denies_on_stale_snapshot(snapshot, policy_path):
+    decision = gate_activation(snapshot, Policy.from_toml(policy_path), "900",
+                               now=_now(snapshot) + timedelta(days=3))
+    assert decision["decision"] == "deny"
+    assert "fail closed" in decision["reason"]
+
+
+def test_gate_activation_disabled_rule_stands_down(snapshot):
+    policy = Policy(rules={"activation_gate": {"enabled": False}})
+    decision = gate_activation(snapshot, policy, "900")
+    assert decision["decision"] == "allow"
+    assert "disabled" in decision["note"]
+
+
+def test_gate_activation_waiver_matches_source_table(snapshot, policy_path):
+    policy = Policy.from_toml(policy_path)
+    policy.waivers = [Waiver(rule="activation_gate", target="dim_account", reason="JIRA-4")]
+    decision = gate_activation(snapshot, policy, "900", now=_now(snapshot))
+    assert decision["decision"] == "allow" and decision["waived"]
+
+
+def test_gate_activation_reports_expired_waiver_on_deny(snapshot, policy_path):
+    policy = Policy.from_toml(policy_path)
+    policy.waivers = [Waiver(rule="activation_gate", target="900", reason="lapsed",
+                             expires=_now(snapshot).date() - timedelta(days=1))]
+    decision = gate_activation(snapshot, policy, "900", now=_now(snapshot))
+    assert decision["decision"] == "deny"
+    assert decision["expired_waiver"]["reason"] == "lapsed"
+
+
+def test_gate_activation_denies_ambiguous_table_reference(snapshot, policy_path):
+    syncs = snapshot["activations"]["syncs"]
+    original = next(s for s in syncs
+                    if (s.get("source_object") or {}).get("table_name") == "dim_account")
+    clone = copy.deepcopy(original)
+    clone["sync_id"] = 999901
+    doc = {**snapshot,
+           "activations": {**snapshot["activations"], "syncs": [*syncs, clone]}}
+    decision = gate_activation(doc, Policy.from_toml(policy_path), "dim_account",
+                               now=_now(snapshot))
+    assert decision["decision"] == "deny"
+    assert "Ambiguous" in decision["reason"]
+
+
+# -- loader hardening --------------------------------------------------------------
+def test_loader_wraps_non_json_http_body(monkeypatch):
+    import httpx
+
+    def fake_get(url, **kwargs):
+        return httpx.Response(200, text="<html>gateway</html>",
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("dq_middleware.snapshot.httpx.get", fake_get)
+    with pytest.raises(SnapshotError, match="non-JSON"):
+        load_snapshot("http://127.0.0.1:9/metadata/latest")
+
+
+def test_expected_version_matches_service_schema_version():
+    from metadata_service.models.common import SCHEMA_VERSION
+
+    assert EXPECTED_VERSION == SCHEMA_VERSION, (
+        "The metadata-service snapshot SCHEMA_VERSION changed: update the example's "
+        "EXPECTED_VERSION and re-verify the contract fields its rules consume."
+    )
