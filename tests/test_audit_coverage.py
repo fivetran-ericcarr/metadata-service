@@ -162,3 +162,19 @@ def test_drift_cli_reports_records(monkeypatch, tmp_path):
     result = CliRunner().invoke(app, ["drift"])
     assert result.exit_code == 0
     assert "removed_table" in result.output
+
+
+def test_local_read_latest_caches_until_changed(tmp_path):
+    from metadata_service.storage.local_storage import LocalStorage
+
+    s = LocalStorage(str(tmp_path))
+    s.write_snapshot({"generated_at": "2026-07-01T00:00:00Z", "n": 1},
+                     snapshot_name="2026-07-01T00-00-00Z")
+    a = s.read_latest()
+    b = s.read_latest()
+    assert a is b  # cache hit: unchanged latest.json isn't re-parsed
+    # A new build rewrites latest.json (different size) -> cache invalidated.
+    s.write_snapshot({"generated_at": "2026-07-02T00:00:00Z", "n": 2, "extra": "x"},
+                     snapshot_name="2026-07-02T00-00-00Z")
+    c = s.read_latest()
+    assert c["n"] == 2

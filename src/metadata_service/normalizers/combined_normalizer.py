@@ -12,6 +12,7 @@ from ..config import Settings
 from ..dq.activation_gate import evaluate_syncs, is_warn_with_failures
 from ..dq.lineage import LineageGraph
 from ..dq.recommendations import activation_risk, recommend_for_object
+from ..dq.status import FAILING_STATUSES as _FAILING_STATUSES
 from ..models.common import (
     MATCH_CASE_INSENSITIVE,
     MATCH_CONFIGURED_ALIAS,
@@ -23,10 +24,6 @@ from ..models.common import (
 )
 
 logger = logging.getLogger(__name__)
-
-# dbt test statuses that count as a failure (the run is red). Kept in one place
-# so dq_summary counts and the metric-quality rollup agree.
-_FAILING_STATUSES = {"fail", "error", "runtime error"}
 
 
 class CombinedNormalizer:

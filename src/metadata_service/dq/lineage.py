@@ -18,12 +18,6 @@ class LineageGraph:
                 self._children[frm].append(to)
                 self._parents[to].append(frm)
 
-    def children(self, uid: str) -> list[str]:
-        return list(self._children.get(uid, []))
-
-    def parents(self, uid: str) -> list[str]:
-        return list(self._parents.get(uid, []))
-
     def descendants(self, uid: str) -> list[str]:
         """All downstream nodes reachable from ``uid`` (BFS, excludes uid)."""
         return self._reach(uid, self._children)

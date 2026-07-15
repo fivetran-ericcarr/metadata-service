@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (audit cleanup — dedup, dead code, caching, docs)
+- Shared `dq/status.py` (`FAILING_STATUSES`/`is_failing_status`) replaces three
+  copies of the failing-test status set (combined normalizer, recommendations,
+  activation gate) so triage counts and the gate can't drift apart.
+- Shared `clients/_http.parse_retry_after` replaces the byte-identical helper
+  copied into all three API clients.
+- Removed dead code: `FivetranClient.get_connector_types`,
+  `ActivationsClient.get_sync`, `LineageGraph.children/parents`, and the unused
+  `MATCH_EXACT_RELATION` constant.
+- `LocalStorage.read_latest` caches the parsed document keyed by (mtime, size),
+  so the REST/MCP hot path doesn't re-parse an unchanged ~1 MB snapshot on every
+  request (invalidated automatically — a build's `os.replace` bumps mtime).
+- Docs: ARTIFACTS.md/README reconciled with the produced contract (build_scope,
+  activations in the README JSON block, `trust_level` `unknown`, freshness in
+  `failing_tests_count`, drift-severity recovery nuance, reserved
+  `exact_relation`, activation back-ref fields).
+
 ### Fixed (whole-repo audit — durability, concurrency, scope, serving)
 - **Storage durability**: `latest.json`/history writes `fsync` the temp file and
   its directory before/after `os.replace` (a rename can otherwise be journaled

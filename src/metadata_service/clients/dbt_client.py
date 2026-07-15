@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from ._http import parse_retry_after as _parse_retry_after
 from ..config import Settings
 from ..exceptions import (
     DbtArtifactNotFoundError,
@@ -256,11 +257,3 @@ class DbtClient:
         return resp.json()
 
 
-def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
-    """Numeric Retry-After, clamped; HTTP-date values fall back to the default."""
-    if not value:
-        return default
-    try:
-        return max(0.0, min(float(value), max_seconds))
-    except (TypeError, ValueError):
-        return default

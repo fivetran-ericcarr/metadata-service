@@ -15,8 +15,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ..models.common import CONFIDENCE_HEURISTIC, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM
+from .status import FAILING_STATUSES as _FAILING_STATUSES
 
-_FAILING_STATUSES = {"fail", "error", "runtime error"}
 _CATEGORICAL_TOKENS = {"status", "type", "category", "kind", "state", "stage"}
 _BOOLEAN_PREFIXES = ("is_", "has_")
 # Distinctive substrings that suggest a column holds personal / sensitive data.

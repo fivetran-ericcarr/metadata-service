@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
+from ._http import parse_retry_after as _parse_retry_after
 from ..config import Settings
 from ..exceptions import (
     FivetranAuthError,
@@ -174,19 +175,7 @@ class FivetranClient:
         )
         return self._get_data(path)
 
-    def get_connector_types(self) -> list[dict]:
-        return self._get_paginated("/metadata/connector-types")
-
     def get_connector_type(self, service: str) -> dict:
         return self._get_data(f"/metadata/connector-types/{quote(service, safe='')}")
 
 
-def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
-    """Numeric Retry-After, clamped so one header can't stall a run for hours.
-    HTTP-date values fall back to the default."""
-    if not value:
-        return default
-    try:
-        return max(0.0, min(float(value), max_seconds))
-    except (TypeError, ValueError):
-        return default

@@ -22,6 +22,10 @@ from ..models.common import snapshot_timestamp
 logger = logging.getLogger(__name__)
 
 _LATEST = "latest.json"
+# Parsed latest.json cache, keyed by resolved path -> (mtime_ns, size, doc).
+# Module-level so it survives the per-request LocalStorage instances the REST/MCP
+# layers create; invalidated automatically because os.replace bumps mtime.
+_LATEST_CACHE: dict[str, tuple] = {}
 # Only files shaped like snapshot timestamps count as snapshots — a stray
 # aliases.json or editor backup must not become drift's "previous" baseline.
 # The optional -\d{6} tail is the microsecond component (older second-resolution
@@ -105,7 +109,24 @@ class LocalStorage:
         return uri
 
     def read_latest(self) -> dict | None:
-        return self._read(self._root / _LATEST)
+        # latest.json is re-read on every REST/MCP request; it changes only when a
+        # build rewrites it (via os.replace, which bumps mtime), so cache the
+        # parsed doc keyed by (mtime, size) and skip re-parsing ~1 MB per call.
+        # NOTE: the cached dict is shared — callers must treat it as read-only
+        # (all current readers do; they build new lists rather than mutate).
+        path = self._root / _LATEST
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        key = str(path.resolve())
+        cached = _LATEST_CACHE.get(key)
+        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+            return cached[2]
+        doc = self._read(path)
+        if doc is not None:
+            _LATEST_CACHE[key] = (st.st_mtime_ns, st.st_size, doc)
+        return doc
 
     def read_previous(self) -> dict | None:
         snapshots = self._snapshot_files()

@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from ._http import parse_retry_after as _parse_retry_after
 from ..config import Settings
 from ..exceptions import ActivationsAuthError, ActivationsError, ActivationsRateLimitError
 
@@ -121,13 +122,6 @@ class ActivationsClient:
         (source/destination attributes + mappings) in the list response."""
         return self._list_paginated("/syncs")
 
-    def get_sync(self, sync_id: int | str) -> dict:
-        payload = self._get(f"/syncs/{sync_id}")
-        if isinstance(payload, dict):
-            data = payload.get("data", payload)
-            return data if isinstance(data, dict) else {}
-        return {}
-
     def list_sources(self) -> list[dict]:
         return self._list_paginated("/sources")
 
@@ -135,11 +129,3 @@ class ActivationsClient:
         return self._list_paginated("/destinations")
 
 
-def _parse_retry_after(value: str | None, default: float = 2.0, max_seconds: float = 60.0) -> float:
-    """Numeric Retry-After, clamped; HTTP-date values fall back to the default."""
-    if not value:
-        return default
-    try:
-        return max(0.0, min(float(value), max_seconds))
-    except (TypeError, ValueError):
-        return default
