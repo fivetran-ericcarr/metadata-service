@@ -44,4 +44,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "examples/dq_middleware/tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "examples/dq_middleware"]

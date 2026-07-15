@@ -24,9 +24,10 @@ Zero dependencies beyond what the metadata-service repo already ships
 |---|---|---|
 | Loading the snapshot (file or REST + `X-API-Key`), schema-version guard | `dq_middleware/snapshot.py` | top-level `version`, `warehouse_objects` |
 | Declarative policy + rules | `policy.toml`, `dq_middleware/engine.py` | `dq_summary.*` (incl. `warn_tests_with_failures_count`), `match_confidence`, `dq_recommendations[].risk/signal`, `activations.syncs[].readiness` |
-| **Fail-closed gating** | `engine.py` | stale snapshot → FAIL; unknown sync → deny; can't read facts → HTTP 503, never "pass" |
-| **Waivers**: explicit, targeted, attributed, expiring | `engine.py` | expired waivers stop working and are reported as `[STALE]` |
-| CI gate (exit codes) | `dq_middleware/cli.py` | `evaluate` → 0/1, `gate-activation <sync>` → 0/1 |
+| **Fail-closed gating** | `engine.py` | stale or future-dated snapshot → FAIL (and per-sync deny); unknown or ambiguous sync → deny; can't read facts → HTTP 503, never "pass" |
+| **Fail-closed policy loading** | `engine.py` (`Policy.from_toml`) | unknown rule names, mistyped option values, quoted `expires` dates, or a policy that enables nothing raise `PolicyError` instead of silently gating on less |
+| **Waivers**: explicit, targeted, attributed, expiring | `engine.py` | expired waivers stop working and are reported as `[STALE]`; targeted waivers beat `"*"`; `expires` is inclusive through that date, UTC |
+| CI gate (exit codes) | `dq_middleware/cli.py` | `evaluate` → 0 pass / 1 fail, `gate-activation <sync>` → 0 allow / 1 deny; **2 = facts or policy unreadable** (fail closed — treat any non-zero as not-safe) |
 | Decision API for orchestrators | `dq_middleware/api.py` | `/gate/deploy`, `/gate/activations/{sync}`, `/decisions` |
 
 ## Run it (offline, no credentials)
@@ -91,7 +92,15 @@ curl -s localhost:8900/gate/activations/900      # {"decision": "deny", ...}
 
 `DQMW_SNAPSHOT_SOURCE` can also be the metadata-service base URL
 (`http://127.0.0.1:8080`) with `DQMW_METADATA_API_KEY` set — the middleware then
-pulls `/metadata/latest` live instead of reading the file.
+pulls `/metadata/latest` live instead of reading the file. Use `https://` for
+anything beyond loopback: the key travels in an `X-API-Key` header, and the
+loader warns if it would send it over cleartext `http://`.
+
+The per-sync pre-flight (`/gate/activations/{sync}` and `gate-activation`)
+applies the same `snapshot_freshness` rule before answering — a stale snapshot
+is a deny, never a confident allow from old facts. It also refuses to answer
+for an ambiguous table name (two syncs reading the same source table): use the
+sync id.
 
 ## Tests
 
@@ -106,6 +115,9 @@ shape drifts, this example fails before a real integration would.
 ## What a real implementation would add
 
 Notification/ticketing sinks, per-team policy resolution, decision persistence
-and audit history, OPA/rego-style policy composition, and a remediation
-workqueue. The contract consumption pattern — load, verify version, evaluate,
-fail closed — stays the same.
+and audit history, OPA/rego-style policy composition, a remediation workqueue,
+and **snapshot caching** — this example re-reads the snapshot and policy on
+every request for simplicity, but snapshots are immutable per `generated_at`,
+so a real decision API would cache by mtime/ETag instead of re-fetching per
+pre-flight call. The contract consumption pattern — load, verify version,
+evaluate, fail closed — stays the same.
