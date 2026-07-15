@@ -7,13 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (dq_middleware review findings)
+- **Policy loading fails closed**: `Policy.from_toml` now validates everything —
+  unknown rule names or options, non-table rule sections, mistyped values
+  (scalar `schemas`, non-numeric thresholds, quoted `expires` dates), unknown
+  waiver rules, and a policy that enables no rules all raise `PolicyError`
+  instead of silently gating on less than the author wrote (previously a
+  one-character typo in a rule name disabled the rule with no signal).
+- **Engine**: freshness rule handles timezone-naive `generated_at` (assumed
+  UTC, no crash) and rejects future-dated snapshots (clock skew/corruption);
+  `max_high_risk_objects` applies waivers *before* the threshold, so waived
+  objects no longer eat the budget and their waivers aren't misreported as
+  unused; targeted waivers now beat `"*"` wildcards (attribution and
+  unused-waiver accounting stay truthful).
+- **Activation pre-flight** (`gate-activation` / `/gate/activations/{sync}`):
+  denies on a stale snapshot (same `snapshot_freshness` rule as the deploy
+  gate); denies an ambiguous table-name reference instead of answering for
+  whichever sync appears first; waivers match by source table name (as
+  `policy.toml` documented) not just sync id; a lapsed waiver is named in the
+  deny response; a policy with `activation_gate` disabled now stands the gate
+  down explicitly instead of silently gating with defaults.
+- **Error handling**: `TOMLDecodeError` and non-JSON HTTP bodies now surface as
+  the designed fail-closed responses (CLI exit 2, API 503) instead of raw
+  tracebacks/500s; the API's 503 detail is generic with specifics logged
+  server-side; the loader follows redirects and warns before sending the API
+  key over cleartext `http://` beyond loopback.
+- **CLI/API surfaces**: the `evaluate` command is named via its decorator (the
+  fragile `registered_commands[0].name` mutation is gone); `--policy` defaults
+  to the policy.toml beside the example so the documented invocations work from
+  any cwd; the CLI honors `DQMW_METADATA_API_KEY` (and still `METADATA_API_KEY`);
+  exit code 2 (facts/policy unreadable) is documented everywhere exit codes are.
+- **Tests**: the example's snapshot fixture pins `Settings` fields (mirroring
+  `tests/conftest.py`) so a developer's `.env` can't flip main-suite results;
+  the example package is importable via pyproject `pythonpath` instead of a
+  session-wide `sys.path` mutation in conftest; a tripwire test asserts the
+  example's `EXPECTED_VERSION` matches the service's `SCHEMA_VERSION`; new
+  coverage for every fix above (policy validation matrix, future/naive
+  timestamps, threshold-vs-waiver, wildcard precedence, stale/ambiguous/
+  expired-waiver pre-flight denials, non-JSON body, exit code 2).
+
 ### Added
 - `examples/dq_middleware/` — a functionally complete toy **DQ policy
   middleware** demonstrating how a DQaaS platform consumes the snapshot
   contract: a TOML policy engine (7 rules over `dq_summary`, risks, coverage,
   staleness, snapshot age, and activation readiness) with **expiring,
   attributed waivers**; a CI-gate CLI (`evaluate` / `gate-activation`, exit
-  codes 0/1); and a decision API (`/gate/deploy`, `/gate/activations/{sync}`,
+  codes 0/1, or 2 when facts are unreadable); and a decision API (`/gate/deploy`, `/gate/activations/{sync}`,
   `/decisions`). Everything fails closed: stale snapshot → FAIL, unknown sync →
   deny, unreadable facts → 503. Its tests build a real snapshot from the repo
   fixtures through the actual pipeline, doubling as a consumer-side contract

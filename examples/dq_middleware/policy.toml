@@ -36,9 +36,11 @@ allowed_verdicts = ["allow"]  # add "warn" to tolerate governance gaps
 enabled = false               # enable to force explicit waivers for PII columns
 
 # Waivers: explicit, targeted, attributed, expiring. An expired waiver stops
-# working and shows up in the report as [STALE].
+# working and shows up in the report as [STALE]. A targeted waiver always beats
+# a "*" wildcard. `expires` must be an unquoted TOML date (quoting it is a
+# policy error) and is inclusive through that calendar date, in UTC.
 # [[waivers]]
 # rule = "activation_gate"
-# target = "3580269"                # sync_id, "schema.table", or "*"
+# target = "3580269"                # sync_id, source table, "schema.table", or "*"
 # reason = "JIRA-123: dupes fixed upstream, backfill lands Friday"
 # expires = 2026-08-01
