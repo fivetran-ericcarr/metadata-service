@@ -406,3 +406,39 @@ def test_drift_scope_mismatch_emits_skipped_marker():
                            doc({"include_dbt": False}, ["a"]))
     assert [r["change_type"] for r in records] == ["comparison_skipped"]
     assert records[0]["severity"] == "info"
+
+
+# ---- MCP serving mediums ------------------------------------------------------
+def test_mcp_refuses_schema_version_mismatch(monkeypatch):
+    from metadata_service.mcp import tools
+
+    class _Store:
+        def read_latest(self):
+            return {"version": "9.9", "warehouse_objects": []}
+
+    monkeypatch.setattr(tools, "get_storage", lambda s: _Store())
+    with pytest.raises(tools.MetadataUnavailable, match="schema version"):
+        tools._latest(Settings())
+
+
+def test_get_latest_metadata_rejects_unknown_scope():
+    from metadata_service.mcp import tools
+
+    out = tools.get_latest_metadata("activations", settings=Settings())  # plausible typo
+    assert "error" in out and "Unknown scope" in out["error"]
+
+
+def test_warehouse_object_route_is_case_insensitive(monkeypatch, tmp_path):
+    settings = Settings(metadata_storage_backend="local", metadata_local_path=str(tmp_path),
+                        warehouse_type="warehouse", stale_sync_threshold_hours=24)
+    monkeypatch.setattr("metadata_service.api.routes.get_settings", lambda: settings)
+    build_and_store(settings, fixtures_dir=str(FIXTURES))
+    from metadata_service.api.main import create_app
+
+    client = TestClient(create_app())
+    # A real object id is lower-cased; request it upper-cased.
+    objs = client.get("/metadata/warehouse-objects").json()["warehouse_objects"]
+    schema, name = objs[0]["schema"], objs[0]["name"]
+    resp = client.get(f"/metadata/warehouse-objects/{schema.upper()}/{name.upper()}")
+    assert resp.status_code == 200
+    assert resp.json()["object_id"] == objs[0]["object_id"]

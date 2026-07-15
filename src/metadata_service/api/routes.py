@@ -128,9 +128,13 @@ def warehouse_object(object_id: str) -> dict:
     suffix used to match the first id merely ENDING in the string (asking for
     "orders" could return "stg_orders") — bare names now 404 instead."""
     objects = _load_latest_or_404().get("warehouse_objects", [])
+    # Object ids are lower-cased by the producer; match case-insensitively so a
+    # caller echoing warehouse casing (e.g. SALESFORCE/ACCOUNT) isn't a 404 while
+    # the sibling ?schema=&table= filter finds the same object.
+    needle = object_id.lower()
     for obj in objects:
-        oid = obj.get("object_id") or ""
-        if oid == object_id or ("/" in object_id and oid.endswith("/" + object_id)):
+        oid = (obj.get("object_id") or "").lower()
+        if oid == needle or ("/" in needle and oid.endswith("/" + needle)):
             return obj
     raise HTTPException(status_code=404, detail=f"Warehouse object not found: {object_id}")
 

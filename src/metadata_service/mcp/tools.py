@@ -18,15 +18,28 @@ from ..storage.base import get_storage
 
 logger = logging.getLogger(__name__)
 
+_SCOPES = ("all", "fivetran", "dbt", "warehouse_objects", "full")
+
+
+class MetadataUnavailable(RuntimeError):
+    """The snapshot cannot be served for gating/answers. Its message is safe to
+    surface to a client (no internal paths/hosts) — unlike a raw StorageError."""
+
 
 def _latest(settings: Settings) -> dict:
     latest = get_storage(settings).read_latest()
     if latest is None:
-        raise RuntimeError("No metadata snapshot found. Call refresh_metadata first.")
+        raise MetadataUnavailable("No metadata snapshot found. Call refresh_metadata first.")
     version = latest.get("version")
     if version != SCHEMA_VERSION:
-        logger.warning("Snapshot schema version %r differs from the reader's %r; "
-                       "fields added since then read as empty defaults.", version, SCHEMA_VERSION)
+        # Fail closed like the documented consumer contract: a mismatched schema
+        # means fields this reader relies on may be absent and would read as
+        # empty defaults, producing silently-wrong DQ answers. Refuse instead.
+        raise MetadataUnavailable(
+            f"Snapshot schema version {version!r} != supported {SCHEMA_VERSION!r}; "
+            "refusing to serve metadata this reader was not built against. Rebuild "
+            "the snapshot (refresh_metadata) or upgrade the service."
+        )
     return latest
 
 
@@ -67,6 +80,10 @@ def get_latest_metadata(scope: str = "all", settings: Settings | None = None) ->
     blow agent context); use ``fivetran``/``dbt`` for a raw section or ``full``
     for the verbatim document."""
     settings = settings or get_settings()
+    if scope not in _SCOPES:
+        # An unrecognized scope used to silently return the 'all' document — a
+        # typo ('activations', 'Fivetran') got a payload that wasn't asked for.
+        return {"error": f"Unknown scope {scope!r}. Valid scopes: {', '.join(_SCOPES)}."}
     doc = _latest(settings)
     if scope == "fivetran":
         return doc.get("sources", {}).get("fivetran", {})

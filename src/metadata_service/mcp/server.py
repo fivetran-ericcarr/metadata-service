@@ -38,14 +38,28 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
 
     import anyio
 
+    from .tools import MetadataUnavailable
+
     server = FastMCP("fivetran-dbt-metadata", host=host, port=port)
 
     async def _threaded(fn, *args):
         """Run a blocking tool (storage read + full-document JSON parse) in a
         worker thread so a slow read doesn't freeze every other session on the
         HTTP transports — the read tools are otherwise invoked inline on the
-        event loop."""
-        return await anyio.to_thread.run_sync(lambda: fn(*args))
+        event loop.
+
+        Error detail is sanitized before it leaves the server: a Metadata
+        Unavailable message is curated and safe to show, but any other exception
+        (e.g. a StorageError embedding a filesystem path, or an httpx error with
+        an internal host) is logged server-side and replaced with a generic
+        message — the HTTP transports may be reachable by untrusted clients."""
+        try:
+            return await anyio.to_thread.run_sync(lambda: fn(*args))
+        except MetadataUnavailable:
+            raise  # safe, curated message
+        except Exception as exc:
+            logger.exception("MCP tool %s failed", getattr(fn, "__name__", fn))
+            raise RuntimeError(f"{getattr(fn, '__name__', 'tool')} failed; see server logs.") from exc
 
     # --- Orientation / discovery (compact, agent-friendly) ----------------
     @server.tool()
@@ -173,8 +187,6 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         the same scoping as the CLI build (group, dbt project, filters) so an
         agent-triggered refresh matches the scheduled one. Long-running (minutes
         on live accounts); returns {status: in_progress_error} if already running."""
-        import anyio
-
         from ..exceptions import RefreshInProgressError
 
         try:
@@ -189,6 +201,11 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         except RefreshInProgressError:
             return {"status": "in_progress_error",
                     "message": "A refresh is already running; try again when it finishes."}
+        except Exception:
+            # Don't leak build internals (paths, hosts, tracebacks) to the client;
+            # log server-side and return a generic status (mirrors the REST layer).
+            logger.exception("MCP refresh_metadata failed")
+            return {"status": "error", "message": "Refresh failed; see server logs."}
 
     return server
 
