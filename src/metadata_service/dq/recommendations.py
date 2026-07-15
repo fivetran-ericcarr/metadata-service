@@ -354,9 +354,19 @@ def _is_stale(last_sync: str | None, threshold_hours: int, now: datetime | None 
 
 
 def _parse_dt(value) -> datetime | None:
-    # Connectors occasionally report timestamps as non-strings (e.g. epoch ints);
-    # coerce rather than crash — an unparseable value just means "not stale".
+    # Connectors occasionally report timestamps as epoch numbers rather than
+    # ISO-8601 strings. datetime.fromisoformat(str(epoch)) raises, so these used
+    # to silently parse to None and read as "not stale" — a fail-open hole.
+    # Handle numeric epochs (int/float, or a bare-digit string) explicitly.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _from_epoch(float(value))
     raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return _from_epoch(float(raw))
+    except ValueError:
+        pass  # not a bare number — fall through to ISO parsing
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
     try:
@@ -366,3 +376,14 @@ def _parse_dt(value) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _from_epoch(epoch: float) -> datetime | None:
+    # Values too large to be plausible seconds are milliseconds (1e11 s ~ year
+    # 5138). Reject anything that still can't be represented as a UTC datetime.
+    if abs(epoch) > 1e11:
+        epoch /= 1000.0
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None

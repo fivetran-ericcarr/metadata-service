@@ -16,8 +16,14 @@ class MetadataStorage(Protocol):
     ``latest``, and expose the previous snapshot for drift comparison.
     """
 
-    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None) -> str:
-        """Write a snapshot (and update ``latest``). Returns the snapshot URI."""
+    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None,
+                       *, update_latest: bool = True) -> str:
+        """Write a timestamped snapshot and return its URI.
+
+        With ``update_latest=True`` (default) also promote it to ``latest``.
+        A degraded build passes ``update_latest=False`` to keep a forensic
+        history file without letting the bad snapshot become the served baseline.
+        """
         ...
 
     def read_latest(self) -> dict | None:

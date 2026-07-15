@@ -33,15 +33,19 @@ def build_object_id(
     database: str | None,
     schema: str | None,
     table: str | None,
-    warehouse: str = "warehouse",
 ) -> str:
     """Build a stable, warehouse-agnostic object id.
 
     Format: ``warehouse://database/schema/table``. Missing parts become
     ``unknown``. Lower-cased so Fivetran (which usually lower-cases destination
     identifiers) and dbt relations join deterministically.
+
+    The ``warehouse://`` scheme is fixed and deliberately warehouse-agnostic
+    (per ARTIFACTS.md): deriving it from WAREHOUSE_TYPE would rewrite every id
+    when the Snowflake reader is enabled, mass-firing removed_table/new_table
+    drift and orphaning any persisted references (waiver targets, tickets).
     """
     db = (database or "unknown").lower()
     sc = (schema or "unknown").lower()
     tb = (table or "unknown").lower()
-    return f"{warehouse.lower()}://{db}/{sc}/{tb}"
+    return f"warehouse://{db}/{sc}/{tb}"

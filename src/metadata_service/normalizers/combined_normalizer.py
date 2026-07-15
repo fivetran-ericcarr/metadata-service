@@ -24,11 +24,14 @@ from ..models.common import (
 
 logger = logging.getLogger(__name__)
 
+# dbt test statuses that count as a failure (the run is red). Kept in one place
+# so dq_summary counts and the metric-quality rollup agree.
+_FAILING_STATUSES = {"fail", "error", "runtime error"}
+
 
 class CombinedNormalizer:
     def __init__(self, settings: Settings | None = None, aliases: dict | None = None) -> None:
         self._settings = settings
-        self._warehouse = getattr(settings, "warehouse_type", "warehouse")
         self._stale_hours = getattr(settings, "stale_sync_threshold_hours", 24)
         # aliases: {"dest_schema.dest_table": "dbt_schema.dbt_table"}. Validate
         # instead of crashing on a malformed entry (None value, missing dot):
@@ -156,9 +159,10 @@ class CombinedNormalizer:
             warehouse_objects=warehouse_objects, stale_object_ids=stale_ids,
         )
 
-        objects_by_id = {o.get("object_id"): o for o in warehouse_objects}
-        # object_id -> list of activation refs that feed it
-        feeds: dict[str, list[dict]] = {}
+        # Key by object identity, not object_id: two connections can land the same
+        # lowercased schema.table (a duplicate object_id), and an id-keyed map
+        # would attach every feed to one twin and leave the other with none.
+        feeds: dict[int, list[dict]] = {}
 
         for sync in evaluated:
             readiness = sync.get("readiness") or {}
@@ -181,12 +185,12 @@ class CombinedNormalizer:
                 if dbt.get("source_unique_id"):
                     owned.add(dbt["source_unique_id"])
                 if owned & upstream:
-                    feeds.setdefault(obj.get("object_id"), []).append(ref)
+                    feeds.setdefault(id(obj), []).append(ref)
 
         # attach to objects + append activates_bad_data risk + refresh summary
-        for object_id, refs in feeds.items():
-            obj = objects_by_id.get(object_id)
-            if obj is None:
+        for obj in warehouse_objects:
+            refs = feeds.get(id(obj))
+            if not refs:
                 continue
             obj["activations"] = refs
             risk = activation_risk(obj, refs)
@@ -233,20 +237,34 @@ class CombinedNormalizer:
                       sources_by_uid, models_by_uid, lineage, exposures=None, metrics=None) -> dict:
         dest_schema = table.get("destination_schema")
         dest_table = table.get("destination_table")
-        object_id = build_object_id(None, dest_schema, dest_table, warehouse=self._warehouse)
+        object_id = build_object_id(None, dest_schema, dest_table)
 
-        source_obj, confidence, notes = self._match(dest_schema, dest_table, source_index)
         model_uids: list[str] = []
         source_uid = None
+        source_obj = None
+
+        # A configured alias wins over any name-based match and may point at a
+        # source OR a model, so it must be resolved across both indexes before
+        # the source-index name match — otherwise an alias->model is shadowed by
+        # a coincidental source name hit.
+        alias_kind, alias_obj = self._resolve_alias(dest_schema, dest_table, source_index, model_index)
+        if alias_obj is not None:
+            confidence, notes = MATCH_CONFIGURED_ALIAS, [f"alias -> {alias_kind}"]
+            if alias_kind == "source":
+                source_obj = alias_obj
+            else:
+                model_uids = [alias_obj["unique_id"]]
+        else:
+            source_obj, confidence, notes = self._match(dest_schema, dest_table, source_index)
+            if source_obj is None:
+                model_obj, mconf, mnotes = self._match(dest_schema, dest_table, model_index)
+                if model_obj is not None:
+                    confidence, notes = mconf, mnotes
+                    model_uids = [model_obj["unique_id"]]
 
         if source_obj is not None:
             source_uid = source_obj["unique_id"]
             model_uids = [d for d in lineage.descendants(source_uid) if d.startswith("model.")]
-        else:
-            model_obj, mconf, mnotes = self._match(dest_schema, dest_table, model_index)
-            if model_obj is not None:
-                confidence, notes = mconf, mnotes
-                model_uids = [model_obj["unique_id"]]
 
         object_tests = self._collect_tests(source_obj, model_uids, models_by_uid)
         freshness = self._freshness(source_obj)
@@ -287,23 +305,32 @@ class CombinedNormalizer:
             "match_notes": notes,
         }
 
-    def _match(self, dest_schema, dest_table, index):
-        """Deterministic matching against a dbt index. Returns (obj, confidence, notes).
+    def _resolve_alias(self, dest_schema, dest_table, source_index, model_index):
+        """Resolve a configured alias to a (kind, obj) across both indexes.
 
-        A configured alias is checked FIRST: aliases exist precisely to override
-        a name-based match that binds to the wrong dbt object, so they must be
-        able to beat an exact hit.
+        Returns ("source"|"model", obj) or (None, None). Aliases exist to
+        override a name-based match that binds to the wrong dbt object, so the
+        target is tried against the source index first, then the model index.
         """
         if not dest_schema or not dest_table:
-            return None, MATCH_UNMATCHED, ["missing destination schema/table"]
+            return None, None
+        target = self._aliases.get(f"{dest_schema}.{dest_table}".lower())
+        if not target or "." not in target:
+            return None, None
+        ci_key = tuple(target.split(".", 1))  # aliases are stored lower-cased
+        if ci_key in source_index["ci"]:
+            return "source", source_index["ci"][ci_key]
+        if ci_key in model_index["ci"]:
+            return "model", model_index["ci"][ci_key]
+        logger.warning("Alias target %r for %s.%s matches no dbt source or model; "
+                       "falling back to name matching.", target, dest_schema, dest_table)
+        return None, None
 
-        alias_target = self._aliases.get(f"{dest_schema}.{dest_table}".lower())
-        if alias_target:
-            ci_key = tuple(alias_target.split(".", 1))
-            if ci_key in index["ci"]:
-                return index["ci"][ci_key], MATCH_CONFIGURED_ALIAS, [f"alias -> {alias_target}"]
-            logger.warning("Alias target %r for %s.%s matches no dbt object; "
-                           "falling back to name matching.", alias_target, dest_schema, dest_table)
+    def _match(self, dest_schema, dest_table, index):
+        """Deterministic name matching against one dbt index (alias handled by
+        :meth:`_resolve_alias` first). Returns (obj, confidence, notes)."""
+        if not dest_schema or not dest_table:
+            return None, MATCH_UNMATCHED, ["missing destination schema/table"]
 
         exact_key = (dest_schema, dest_table)
         if exact_key in index["exact"]:
@@ -382,7 +409,15 @@ class CombinedNormalizer:
             metric_models = set(m.get("model_unique_ids") or [])
             upstream = [o for o in warehouse_objects
                         if set((o.get("dbt") or {}).get("model_unique_ids") or []) & metric_models]
-            failing = sum((o.get("dq_summary") or {}).get("failing_tests_count", 0) for o in upstream)
+            # Count DISTINCT failing tests: when several upstream objects share a
+            # downstream model, summing each object's failing_tests_count counts
+            # that model's one failing test once per object (N-fold inflation).
+            failing_uids = set()
+            for o in upstream:
+                for t in (o.get("dbt") or {}).get("tests") or []:
+                    if (t.get("status") or "").lower() in _FAILING_STATUSES:
+                        failing_uids.add(t.get("unique_id") or id(t))
+            failing = len(failing_uids)
             risk_levels = {(o.get("dq_summary") or {}).get("risk_level") for o in upstream}
             if "high" in risk_levels or failing > 0:
                 trust = "at_risk"
@@ -413,13 +448,29 @@ class CombinedNormalizer:
         return tests
 
     @staticmethod
+    def _freshness_configured(raw) -> bool:
+        """True only if a dbt source actually declares a freshness policy.
+
+        dbt-core serializes an *unconfigured* source's freshness as a non-empty
+        but all-null dict ({"warn_after": {"count": null, ...}, ...}), which is
+        truthy — so a bare `if raw:` reports freshness coverage that isn't there.
+        """
+        if not isinstance(raw, dict):
+            return bool(raw)
+        for key in ("warn_after", "error_after"):
+            spec = raw.get(key)
+            if isinstance(spec, dict) and spec.get("count") is not None:
+                return True
+        return False
+
+    @staticmethod
     def _freshness(source_obj) -> dict | None:
         if not source_obj:
             return None
         result = source_obj.get("freshness_result")
         if result:
             return {"status": result.get("status"), "max_loaded_at": result.get("max_loaded_at")}
-        if source_obj.get("freshness"):
+        if CombinedNormalizer._freshness_configured(source_obj.get("freshness")):
             return {"status": None, "max_loaded_at": None, "configured": True}
         return None
 
@@ -486,13 +537,27 @@ class CombinedNormalizer:
         columns = obj.get("columns") or []
         pk_cols = [c for c in columns if c.get("is_primary_key")]
         has_pk = bool(pk_cols)
+        all_tests = (obj.get("dbt") or {}).get("tests") or []
+        # A table-level combination-uniqueness test (dbt_utils.unique_combination_
+        # of_columns) has no attached_column, so it never lands in a column's
+        # dbt_tests — but it IS the correct uniqueness coverage for a composite
+        # key. Detect it at the object level.
+        has_combo_unique = any(
+            "unique_combination" in (t.get("test_type") or "").lower() for t in all_tests
+        )
 
         def has_pk_tests() -> bool:
             if not has_pk:
                 return False
             for col in pk_cols:
                 present = {t.lower() for t in (col.get("dbt_tests") or [])}
-                if not {"not_null", "unique"}.issubset(present):
+                if "not_null" not in present:
+                    return False
+                # Uniqueness can be satisfied per-column (single key) or by a
+                # table-level combination test (composite key) — requiring
+                # per-column `unique` on a composite key would be semantically
+                # wrong and can never be satisfied.
+                if not has_combo_unique and "unique" not in present:
                     return False
             return True
 
@@ -501,14 +566,14 @@ class CombinedNormalizer:
 
         failing = warn_failing = 0
         for test in (obj.get("dbt") or {}).get("tests") or []:
-            if (test.get("status") or "").lower() in {"fail", "error", "runtime error"}:
+            if (test.get("status") or "").lower() in _FAILING_STATUSES:
                 failing += 1
             elif is_warn_with_failures(test):
                 # A warn-severity test that is actually firing: the dbt run stays
                 # green, but rows are failing — triage must see it, not just the
                 # activation gate.
                 warn_failing += 1
-        if (freshness.get("status") or "").lower() in {"fail", "error", "runtime error"}:
+        if (freshness.get("status") or "").lower() in _FAILING_STATUSES:
             failing += 1
 
         rec_tests = sum(1 for r in recs if r.get("recommendation_type") == "dbt_test")
@@ -538,8 +603,9 @@ def _index_dbt(objects: list[dict], *, id_field: str, name_field: str) -> dict:
 
     Collisions (two dbt objects claiming the same schema+table — e.g. the same
     relation declared in two source groups, or the same name in two databases)
-    keep the first entry but are logged: the loser's tests/freshness become
-    invisible to matching, which the operator should know about.
+    keep the FIRST entry and the loser is indexed nowhere — including the exact
+    tier — so a destination matches the kept object regardless of case, matching
+    what the collision warning tells the operator.
     """
     exact: dict[tuple, dict] = {}
     ci: dict[tuple, dict] = {}
@@ -550,12 +616,14 @@ def _index_dbt(objects: list[dict], *, id_field: str, name_field: str) -> dict:
             continue
         ci_key = (schema.lower(), table.lower())
         existing = ci.get(ci_key)
-        if existing is not None and existing.get("unique_id") != obj.get("unique_id"):
-            logger.warning(
-                "dbt index collision on %s.%s: keeping %s, ignoring %s "
-                "(its tests/freshness will not attach to the matched object).",
-                schema, table, existing.get("unique_id"), obj.get("unique_id"),
-            )
-        exact.setdefault((schema, table), obj)
-        ci.setdefault(ci_key, obj)
+        if existing is not None:
+            if existing.get("unique_id") != obj.get("unique_id"):
+                logger.warning(
+                    "dbt index collision on %s.%s: keeping %s, ignoring %s "
+                    "(its tests/freshness will not attach to the matched object).",
+                    schema, table, existing.get("unique_id"), obj.get("unique_id"),
+                )
+            continue  # loser wins neither index — stays consistent with the warning
+        ci[ci_key] = obj
+        exact[(schema, table)] = obj
     return {"exact": exact, "ci": ci}

@@ -85,12 +85,20 @@ def evaluate_syncs(
             if schema and key:
                 source_lookup.setdefault((schema, key), s["unique_id"])
 
-    # source_unique_id -> whether its Fivetran object is stale
+    # dbt uid -> whether its Fivetran object is stale. A stale object can be
+    # matched to a dbt source OR directly to one or more dbt models (no source
+    # declared), so propagate staleness through both; keying only on sources let
+    # a model-matched stale table silently clear the gate.
     stale_sources: set[str] = set()
+    stale_models: set[str] = set()
     for obj in warehouse_objects or []:
-        suid = (obj.get("dbt") or {}).get("source_unique_id")
-        if suid and obj.get("object_id") in stale_object_ids:
-            stale_sources.add(suid)
+        if obj.get("object_id") not in stale_object_ids:
+            continue
+        dbt = obj.get("dbt") or {}
+        if dbt.get("source_unique_id"):
+            stale_sources.add(dbt["source_unique_id"])
+        for muid in dbt.get("model_unique_ids") or []:
+            stale_models.add(muid)
     # source_unique_id -> whether it is matched to a Fivetran object at all
     matched_source_uids = {
         (obj.get("dbt") or {}).get("source_unique_id")
@@ -105,14 +113,15 @@ def evaluate_syncs(
         enriched = dict(sync)
         enriched["readiness"] = _evaluate_one(
             sync, model_lookup, source_lookup, models_by_uid, sources_by_uid,
-            lineage, stale_sources, matched_source_uids, has_coverage_data,
+            lineage, stale_sources, stale_models, matched_source_uids, has_coverage_data,
         )
         out.append(enriched)
     return out
 
 
 def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_uid,
-                  lineage, stale_sources, matched_source_uids, has_coverage_data) -> dict:
+                  lineage, stale_sources, stale_models, matched_source_uids,
+                  has_coverage_data) -> dict:
     obj = sync.get("source_object") or {}
     schema = (obj.get("table_schema") or "").lower()
     name = (obj.get("table_name") or "").lower()
@@ -170,6 +179,8 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
                 warn_failing += 1
                 failing_detail.append({"node": uid, "test": test.get("name"),
                                        "status": "warn", "failures": test.get("failures")})
+        if uid in stale_models:
+            stale += 1
 
     for uid in upstream_sources:
         src = sources_by_uid.get(uid) or {}
@@ -188,7 +199,11 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
                                        "status": "warn", "failures": test.get("failures")})
         if uid in stale_sources:
             stale += 1
-        if uid not in matched_source_uids and matched_source_uids:
+        # A coverage blind spot is only meaningful when we actually have Fivetran
+        # coverage data. Guarding on has_coverage_data (not on the truthiness of
+        # matched_source_uids) means a build where NOTHING matched still flags
+        # every unmatched upstream instead of silently clearing them.
+        if has_coverage_data and uid not in matched_source_uids:
             unmatched += 1
 
     # Evidence gaps — the gate must not say "allow" when it simply has no data.

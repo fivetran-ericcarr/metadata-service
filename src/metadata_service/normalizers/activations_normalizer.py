@@ -40,6 +40,18 @@ class ActivationsNormalizer:
                 "is_primary_identifier": bool(m.get("is_primary_identifier")),
             })
 
+        # `updated_at` is the config-modification time, NOT when data last reached
+        # the destination — labeling it last_synced_at makes a months-idle sync
+        # look fresh. Use a real run-completion timestamp when the API provides
+        # one; otherwise leave last_synced_at null and keep the edit time
+        # separately under config_updated_at.
+        run = sync.get("latest_sync_run") or sync.get("last_sync_run") or {}
+        last_synced_at = (
+            sync.get("last_run_at")
+            or sync.get("last_successful_sync_completed_at")
+            or (run.get("completed_at") if isinstance(run, dict) else None)
+        )
+
         return {
             "sync_id": sync.get("id"),
             "label": sync.get("label"),
@@ -58,5 +70,6 @@ class ActivationsNormalizer:
             "destination_type": (destinations.get(dst_conn) or {}).get("type"),
             "destination_object": dst_obj,
             "mappings": mappings,
-            "last_synced_at": sync.get("updated_at"),
+            "last_synced_at": last_synced_at,
+            "config_updated_at": sync.get("updated_at"),
         }

@@ -41,7 +41,8 @@ class S3Storage:
     def _key(self, *parts: str) -> str:
         return "/".join([p for p in (self._prefix, *parts) if p])
 
-    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None) -> str:
+    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None,
+                       *, update_latest: bool = True) -> str:
         name = snapshot_name or snapshot_timestamp()
         generated_at = metadata.get("generated_at") or name
         date_part = generated_at[:10]
@@ -55,8 +56,9 @@ class S3Storage:
         try:
             self._s3.put_object(Bucket=self._bucket, Key=snapshot_key, Body=body,
                                 ContentType="application/json")
-            self._s3.put_object(Bucket=self._bucket, Key=self._key(_LATEST), Body=body,
-                                ContentType="application/json")
+            if update_latest:
+                self._s3.put_object(Bucket=self._bucket, Key=self._key(_LATEST), Body=body,
+                                    ContentType="application/json")
         except Exception as exc:  # boto ClientError etc.
             raise StorageError(f"Failed to write snapshot to s3://{self._bucket}/{snapshot_key}: {exc}") from exc
 

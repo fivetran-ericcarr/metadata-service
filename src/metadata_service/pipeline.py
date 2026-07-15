@@ -145,20 +145,59 @@ def build_and_store(
             enrich_warehouse=enrich_warehouse,
         )
         doc["schema_drift"] = detect_drift(previous, doc)
-        uri = storage.write_snapshot(doc) if write_latest else None
-        if not write_latest:
+        status = _assess_build_health(doc, previous)
+        uri = None
+        if write_latest:
+            # A degraded build (errors coinciding with a collapsed inventory) must
+            # not become the served baseline — publishing an empty/partial snapshot
+            # over a good one mass-fires false removed_table drift and feeds
+            # downstream gates an empty inventory. Keep a forensic history file,
+            # but leave latest.json pointing at the last good snapshot.
+            promote = status != "degraded"
+            uri = storage.write_snapshot(doc, update_latest=promote)
+            if not promote:
+                logger.error(
+                    "Build DEGRADED (%s errors, %s objects vs %s previously) — wrote history "
+                    "snapshot %s but left latest.json unchanged.",
+                    len(doc.get("errors", [])), len(doc.get("warehouse_objects", [])),
+                    len((previous or {}).get("warehouse_objects", [])), uri,
+                )
+        else:
             logger.info("Snapshot NOT persisted (write_latest=False); latest.json unchanged.")
     finally:
         _REFRESH_LOCK.release()
 
     return {
-        "status": "success",
+        "status": status,
+        "latest_updated": bool(uri) and status != "degraded",
         "snapshot_uri": uri,
         "generated_at": doc.get("generated_at"),
         "object_count": len(doc.get("warehouse_objects", [])),
         "error_count": len(doc.get("errors", [])),
         "doc": doc,
     }
+
+
+# Fraction of the previous snapshot's object inventory a build must retain to be
+# trusted as the new baseline when it also recorded errors.
+_MIN_INVENTORY_RATIO = 0.5
+
+
+def _assess_build_health(doc: dict, previous: dict | None) -> str:
+    """Classify a build: ``success`` (clean), ``partial`` (errored but inventory
+    intact), or ``degraded`` (errored AND lost most/all of its objects — do not
+    promote to latest). A clean build is always ``success``; errors alone never
+    block promotion, only errors *with* a collapsed inventory do."""
+    errors = doc.get("errors") or []
+    if not errors:
+        return "success"
+    obj_count = len(doc.get("warehouse_objects") or [])
+    if obj_count == 0:
+        return "degraded"  # never let an errored, empty snapshot become the baseline
+    prev_count = len((previous or {}).get("warehouse_objects") or [])
+    if prev_count and obj_count < prev_count * _MIN_INVENTORY_RATIO:
+        return "degraded"  # errored build lost >half its inventory — untrustworthy
+    return "partial"
 
 
 # -- live extraction ------------------------------------------------------

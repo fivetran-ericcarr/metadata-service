@@ -53,7 +53,8 @@ class LocalStorage:
         self._root.mkdir(parents=True, exist_ok=True)
         self._retain = retain if retain and retain > 0 else None
 
-    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None) -> str:
+    def write_snapshot(self, metadata: dict, snapshot_name: str | None = None,
+                       *, update_latest: bool = True) -> str:
         name = snapshot_name or snapshot_timestamp()
         # Partition by the embedded generated_at date when available.
         generated_at = metadata.get("generated_at") or name
@@ -70,7 +71,8 @@ class LocalStorage:
         try:
             payload = json.dumps(metadata, indent=2, default=str)
             _write_atomic(snapshot_path, payload)
-            _write_atomic(self._root / _LATEST, payload)
+            if update_latest:
+                _write_atomic(self._root / _LATEST, payload)
         except OSError as exc:
             raise StorageError(f"Failed to write snapshot to {snapshot_path}: {exc}") from exc
 

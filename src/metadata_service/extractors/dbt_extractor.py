@@ -10,10 +10,22 @@ from __future__ import annotations
 import logging
 
 from ..clients.dbt_client import DbtClient
-from ..exceptions import DbtArtifactNotFoundError, DbtError
+from ..exceptions import (
+    DbtArtifactNotFoundError,
+    DbtAuthError,
+    DbtError,
+    DbtPermissionError,
+    DbtRateLimitError,
+)
 from ..models.common import utcnow_iso
 
 logger = logging.getLogger(__name__)
+
+# Errors that cannot heal between calls: retrying every subsequent resource only
+# burns quota / hammers a revoked token and yields a silently dbt-empty snapshot.
+# Re-raise so the build fails loudly instead of degrading into per-resource errors
+# (mirrors FivetranExtractor._FATAL_ERRORS).
+_FATAL_ERRORS = (DbtAuthError, DbtPermissionError, DbtRateLimitError)
 
 _ARTIFACT_PATHS = ["manifest.json", "catalog.json", "run_results.json", "sources.json"]
 _ARTIFACT_KEYS = {
@@ -115,6 +127,8 @@ class DbtExtractor:
                 except DbtArtifactNotFoundError:
                     # Not every run produces every artifact (e.g. no source freshness).
                     continue
+                except _FATAL_ERRORS:
+                    raise  # auth/permission/rate-limit won't recover on the next artifact
                 except DbtError as exc:
                     errors.append({"source": "dbt", "run_id": run_id, "artifact": path,
                                    "error_type": type(exc).__name__, "error_message": str(exc)})
@@ -141,6 +155,8 @@ class DbtExtractor:
     def _safe(fn, errors: list[dict], what: str):
         try:
             return fn()
+        except _FATAL_ERRORS:
+            raise  # auth/permission/rate-limit is fatal for the whole dbt extraction
         except DbtError as exc:
             logger.warning("dbt %s fetch failed: %s", what, exc)
             errors.append({"source": "dbt", "resource": what, "error_type": type(exc).__name__, "error_message": str(exc)})

@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # When set, every REST route except /health requires this key
     # (X-API-Key header or Authorization: Bearer).
     metadata_api_key: str | None = Field(default=None, alias="METADATA_API_KEY")
+    # Escape hatch: allow a non-loopback bind without a key (e.g. when auth is
+    # enforced by a trusted reverse proxy in front of the service).
+    allow_unauthenticated: bool = Field(default=False, alias="METADATA_ALLOW_UNAUTHENTICATED")
 
     # --- MCP server -------------------------------------------------------
     mcp_transport: str = Field(default="stdio", alias="MCP_TRANSPORT")
@@ -129,6 +132,28 @@ class Settings(BaseSettings):
                 "dbt credentials missing: set DBT_ACCOUNT_ID and DBT_SERVICE_TOKEN "
                 "(or run with --fixtures-dir for offline builds)."
             )
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", ""}
+
+
+def guard_remote_bind(host: str | None, api_key: str | None, *, surface: str) -> None:
+    """Refuse to start an unauthenticated service on a non-loopback interface.
+
+    The snapshot is a full warehouse inventory (incl. PII-flagged columns) and
+    ``refresh`` triggers billed extraction, so binding a public interface with no
+    key is fail-open. An empty-string key counts as no key. Set
+    METADATA_ALLOW_UNAUTHENTICATED=1 to opt in (e.g. auth enforced by a proxy).
+    """
+    if (host or "").strip().lower() in _LOOPBACK_HOSTS:
+        return
+    if (api_key or "").strip():
+        return
+    raise ValueError(
+        f"Refusing to start {surface} on non-loopback host {host!r} without an API key. "
+        "Set METADATA_API_KEY, bind a loopback host, or set "
+        "METADATA_ALLOW_UNAUTHENTICATED=1 if a trusted proxy enforces auth."
+    )
 
 
 @lru_cache

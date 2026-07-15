@@ -253,6 +253,11 @@ def get_column_impact(schema: str, table: str, column: str, settings: Settings |
 
     # reverse-ETL destination fields fed by an affected column of an activation's source model
     affected_cols_by_model: dict[str, set] = {}
+    # Seed the start node itself: downstream_columns returns only nodes reachable
+    # via edges, never the origin, so an activation reading this dbt source
+    # DIRECTLY (source_node == source_uid) would otherwise report no blast radius
+    # for a column it pushes verbatim to the operational system.
+    affected_cols_by_model.setdefault(source_uid, set()).add((column or "").lower())
     for a in affected:
         affected_cols_by_model.setdefault(a["unique_id"], set()).add((a.get("column") or "").lower())
     activation_fields: list[dict] = []
