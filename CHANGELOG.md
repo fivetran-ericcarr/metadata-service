@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (whole-repo audit — durability, concurrency, scope, serving)
+- **Storage durability**: `latest.json`/history writes `fsync` the temp file and
+  its directory before/after `os.replace` (a rename can otherwise be journaled
+  before the data blocks, leaving a truncated snapshot after power loss);
+  snapshot filenames use microsecond resolution so two builds in the same second
+  don't overwrite one history file; S3 listing anchors the prefix at a path
+  boundary so retention/`read_previous` never touch a sibling deployment's
+  snapshots on a shared bucket.
+- **Concurrency**: a cross-process advisory file lock serializes builds across
+  processes on one host (CLI-cron + `serve-api` + `serve-mcp`), on top of the
+  in-process lock; every MCP read tool is async and offloaded to a worker thread
+  so one slow storage read no longer freezes all sessions on the HTTP transports.
+- **Build-scope accuracy**: `build_scope` records *effective* coverage (what
+  actually ran), not requested flags; dbt degrades (with a `DbtNotConfigured`
+  error) instead of aborting the whole build when its credentials are missing;
+  PK-enrichment runs fully inside its best-effort guard and its outcome is
+  recorded in scope; `detect_drift` emits a machine-readable `comparison_skipped`
+  marker on scope mismatch instead of an empty list.
+- **MCP serving**: `_latest` fails closed on a schema-version mismatch instead of
+  serving defaulted data; tool error detail is sanitized (curated messages pass
+  through, everything else is logged server-side and replaced with a generic
+  message); `get_latest_metadata` rejects an unknown scope; the REST
+  `warehouse-objects/{id}` route matches case-insensitively.
+
 ### Fixed (whole-repo audit — correctness)
 - **Activation gate no longer fails open on staleness**: a stale Fivetran object
   matched to a dbt *model* (no source declared) now blocks the sync, not just
