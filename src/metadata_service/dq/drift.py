@@ -44,7 +44,13 @@ def detect_drift(previous: dict | None, latest: dict | None) -> list[dict]:
             "comparing them would report scope changes as schema drift.",
             prev_scope, latest_scope,
         )
-        return []
+        # Emit a machine-readable marker rather than a bare [] so consumers can
+        # tell "drift not evaluated" from "compared and found nothing". Filtering
+        # real drift by severity=high/medium naturally excludes this info record.
+        return [_record("*", "comparison_skipped",
+                        {"reason": "build scope changed since the previous snapshot",
+                         "previous_scope": prev_scope, "latest_scope": latest_scope},
+                        severity="info")]
 
     prev_objs = _index_objects(previous)
     latest_objs = _index_objects(latest)

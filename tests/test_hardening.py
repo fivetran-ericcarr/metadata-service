@@ -154,7 +154,11 @@ def _doc(scope, objects):
 def test_drift_skipped_across_different_scopes():
     full = _doc({"group_id": None, "include_fivetran": True}, ["a", "b", "c"])
     scoped = _doc({"group_id": "g1", "include_fivetran": True}, ["a"])
-    assert detect_drift(full, scoped) == []  # NOT two removed_table records
+    records = detect_drift(full, scoped)
+    # A single info-severity marker, NOT two removed_table records.
+    assert [r["change_type"] for r in records] == ["comparison_skipped"]
+    assert records[0]["severity"] == "info"
+    assert not [r for r in records if r["change_type"] in ("removed_table", "new_table")]
 
 
 def test_drift_still_runs_for_matching_scopes():

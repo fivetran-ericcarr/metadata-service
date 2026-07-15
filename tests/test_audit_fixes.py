@@ -367,3 +367,42 @@ def test_mcp_read_tools_are_async_offloaded():
     tools_registered = mcp_server.build_server()._tool_manager.list_tools()
     assert tools_registered, "no MCP tools registered"
     assert all(inspect.iscoroutinefunction(t.fn) for t in tools_registered)
+
+
+# ---- Pipeline-scope accuracy --------------------------------------------------
+def test_dbt_degrades_when_unconfigured_instead_of_aborting():
+    from metadata_service.pipeline import build_metadata
+
+    # Pin creds empty so the developer's .env can't supply real dbt tokens.
+    settings = Settings(warehouse_type="warehouse", dbt_account_id=None, dbt_service_token=None)
+    doc = build_metadata(settings, include_fivetran=False, include_dbt=True,
+                         include_activations=False, enrich_warehouse=False)
+    # Effective scope reflects that dbt did NOT run (not the requested True).
+    assert doc["build_scope"]["include_dbt"] is False
+    assert any(e.get("error_type") == "DbtNotConfigured" for e in doc["errors"])
+
+
+def test_fixtures_build_scope_reflects_content_not_requested_flags():
+    from metadata_service.pipeline import build_metadata
+
+    settings = Settings(warehouse_type="warehouse", stale_sync_threshold_hours=24)
+    a = build_metadata(settings, fixtures_dir=str(FIXTURES), include_dbt=True)
+    b = build_metadata(settings, fixtures_dir=str(FIXTURES), include_dbt=False)
+    # Fixtures load all payloads regardless of include_*, so two fixture builds
+    # have identical scope and remain drift-comparable.
+    assert a["build_scope"] == b["build_scope"]
+    assert a["build_scope"]["include_dbt"] is True
+
+
+def test_drift_scope_mismatch_emits_skipped_marker():
+    from metadata_service.dq.drift import detect_drift
+
+    def doc(scope, objs):
+        return {"build_scope": scope,
+                "warehouse_objects": [{"object_id": o, "origin": {}, "columns": [], "dbt": {}}
+                                      for o in objs]}
+
+    records = detect_drift(doc({"include_dbt": True}, ["a", "b"]),
+                           doc({"include_dbt": False}, ["a"]))
+    assert [r["change_type"] for r in records] == ["comparison_skipped"]
+    assert records[0]["severity"] == "info"

@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     def activations_enabled(self) -> bool:
         return bool(self.activations_api_token)
 
+    def dbt_enabled(self) -> bool:
+        return bool(self.dbt_account_id and self.dbt_service_token)
+
     def warehouse_reader_enabled(self) -> bool:
         return bool(
             (self.warehouse_type or "").lower() == "snowflake"
