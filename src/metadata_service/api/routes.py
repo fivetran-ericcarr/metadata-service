@@ -31,7 +31,11 @@ async def require_api_key(request: Request) -> None:
         auth = request.headers.get("authorization") or ""
         if auth.lower().startswith("bearer "):
             provided = auth[7:]
-    if not provided or not secrets.compare_digest(provided, configured):
+    # Compare as bytes: secrets.compare_digest raises TypeError on non-ASCII str
+    # (Starlette decodes headers as latin-1), which would surface as a 500 rather
+    # than a clean 401 for a bogus key.
+    if not provided or not secrets.compare_digest(provided.encode("utf-8"),
+                                                  configured.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Missing or invalid API key.")
 
 

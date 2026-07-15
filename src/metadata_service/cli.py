@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from .clients import ActivationsClient, DbtClient, FivetranClient
-from .config import get_settings
+from .config import get_settings, guard_remote_bind
 from .dq.drift import detect_drift
 from .extractors import DbtExtractor, FivetranExtractor
 from .extractors.activations_extractor import ActivationsExtractor
@@ -157,6 +157,10 @@ def build(
     typer.echo(json.dumps(summary, indent=2, default=str))
     if not write_latest:
         typer.echo("(dry run: snapshot NOT persisted; latest.json unchanged)")
+    elif result["status"] == "degraded":
+        typer.echo("WARNING: build degraded (errors with a collapsed object inventory); "
+                   "latest.json was NOT updated — a forensic history snapshot was written. "
+                   "Investigate the errors before re-running.", err=True)
 
 
 @app.command()
@@ -191,12 +195,23 @@ def recommendations(
     typer.echo(json.dumps({"count": len(recs), "recommendations": recs}, indent=2, default=str))
 
 
+def _guard_or_exit(host: str | None, api_key: str | None, *, surface: str) -> None:
+    """Fail-closed startup check: refuse an unauthenticated non-loopback bind."""
+    try:
+        guard_remote_bind(host, api_key, surface=surface)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+
 @app.command("serve-api")
 def serve_api() -> None:
     """Start the FastAPI service with uvicorn."""
     import uvicorn
 
     settings = get_settings()
+    if not settings.allow_unauthenticated:
+        _guard_or_exit(settings.api_host, settings.metadata_api_key, surface="the REST API")
     uvicorn.run("metadata_service.api.main:app", host=settings.api_host, port=settings.api_port)
 
 
@@ -214,9 +229,18 @@ def serve_mcp(
     from .mcp.server import run_server
 
     settings = get_settings()
+    resolved_transport = transport or settings.mcp_transport
+    resolved_host = host or settings.mcp_host
+    # The MCP transport has no built-in key, so an http/sse bind on a public
+    # interface exposes the full inventory and the (billed) refresh tool to
+    # anyone on the port. Refuse it unless auth is fronted by a proxy
+    # (METADATA_ALLOW_UNAUTHENTICATED=1).
+    if (resolved_transport or "").lower() != "stdio" and not settings.allow_unauthenticated:
+        _guard_or_exit(resolved_host, None,
+                       surface=f"the MCP {resolved_transport} transport (no per-request auth)")
     run_server(
-        transport=transport or settings.mcp_transport,
-        host=host or settings.mcp_host,
+        transport=resolved_transport,
+        host=resolved_host,
         port=port or settings.mcp_port,
     )
 

@@ -99,7 +99,7 @@ def _build_name_index(manifest: dict) -> dict:
                or column impact gets attributed to the wrong node.
     """
     full: dict[tuple, str] = {}
-    scoped: dict[tuple, str] = {}
+    scoped: dict[tuple, str | None] = {}  # None marks an ambiguous (schema, table)
     bare: dict[str, str | None] = {}  # None marks an ambiguous name
 
     def add(uid: str, database, schema, names) -> None:
@@ -112,7 +112,15 @@ def _build_name_index(manifest: dict) -> dict:
             if db and scm:
                 full.setdefault((db, scm, key), uid)
             if scm:
-                scoped.setdefault((scm, key), uid)
+                # Same ambiguity rule as the bare tier: two nodes sharing
+                # schema+table in different databases must not resolve by
+                # (schema, table) alone, or a schema-qualified reference gets
+                # attributed to the wrong database's node.
+                skey = (scm, key)
+                if skey in scoped and scoped[skey] != uid:
+                    scoped[skey] = None
+                else:
+                    scoped.setdefault(skey, uid)
             if key in bare and bare[key] != uid:
                 bare[key] = None
             else:

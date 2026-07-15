@@ -93,6 +93,7 @@ class ActivationsClient:
         """
         items: list[dict] = []
         page: int | None = 1
+        seen_pages: set = set()
         for _ in range(_MAX_PAGES):
             payload = self._get(path, params={"page": page, "per_page": _PER_PAGE})
             if isinstance(payload, list):  # defensive: unwrapped list response
@@ -103,10 +104,17 @@ class ActivationsClient:
             next_page = ((payload or {}).get("pagination") or {}).get("next_page")
             if not next_page or not data:
                 return items
+            if next_page in seen_pages:  # server echoing a page it already served
+                logger.warning("Activations pagination repeated page %s on %s; stopping walk.",
+                               next_page, path)
+                return items
+            seen_pages.add(next_page)
             page = next_page
-        raise ActivationsError(
-            f"Activations pagination exceeded {_MAX_PAGES} pages for {path}; refusing to loop."
-        )
+        # Hit the page cap. Return what we have (not an empty list) so a very large
+        # workspace degrades to a partial-but-usable inventory instead of vanishing.
+        logger.warning("Activations pagination hit the %s-page cap on %s; returning %s records "
+                       "(results may be truncated).", _MAX_PAGES, path, len(items))
+        return items
 
     def list_syncs(self) -> list[dict]:
         """All syncs in the workspace. Census returns the full sync payload

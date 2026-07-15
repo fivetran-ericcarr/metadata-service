@@ -188,7 +188,20 @@ def test_malformed_table_lands_in_errors_not_crash(settings, dbt_normalized):
     assert combined_errors and combined_errors[0]["table"] == "bad"
 
 
-def test_parse_dt_tolerates_non_string():
-    from metadata_service.dq.recommendations import _is_stale
+def test_parse_dt_handles_epoch_timestamps():
+    from datetime import datetime, timezone
 
-    assert _is_stale(1719878400, 24) is False  # epoch int: unparseable -> not stale, no crash
+    from metadata_service.dq.recommendations import _is_stale, _parse_dt
+
+    # Epoch numbers are real connector output; they must parse (not silently
+    # read as "not stale" — a fail-open hole in a fail-closed gate).
+    now = datetime(2024, 7, 2, tzinfo=timezone.utc)  # ~2 weeks after the epoch below
+    assert _is_stale(1718000000, 24, now=now) is True          # epoch seconds (int)
+    assert _is_stale(1718000000.0, 24, now=now) is True        # epoch seconds (float)
+    assert _is_stale(1718000000000, 24, now=now) is True       # epoch millis
+    # A recent epoch is not stale.
+    recent = int(now.timestamp()) - 3600
+    assert _is_stale(recent, 24, now=now) is False
+    # Genuinely unparseable values still degrade to "not stale" without crashing.
+    assert _parse_dt("not-a-date") is None
+    assert _is_stale("not-a-date", 24, now=now) is False

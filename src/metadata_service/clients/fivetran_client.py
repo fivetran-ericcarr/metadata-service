@@ -138,7 +138,9 @@ class FivetranClient:
             data = self._get_data(path, params=page_params)
             if not isinstance(data, dict):  # pragma: no cover - defensive
                 return items
-            items.extend(data.get("items", []))
+            # ``items`` present-but-null (extend(None) -> TypeError) is a real
+            # Fivetran response for empty collections; coerce like the other clients.
+            items.extend(data.get("items") or [])
             cursor = data.get("next_cursor")
             if not cursor:
                 return items

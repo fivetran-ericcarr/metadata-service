@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (whole-repo audit — correctness)
+- **Activation gate no longer fails open on staleness**: a stale Fivetran object
+  matched to a dbt *model* (no source declared) now blocks the sync, not just
+  objects matched to a dbt source; the unmatched-upstream coverage check fires
+  even when *no* source matched (previously the worst coverage posture gave the
+  most permissive verdict).
+- **Staleness detection handles epoch timestamps**: `_parse_dt` parses epoch
+  seconds/milliseconds (int, float, or bare-digit string) instead of silently
+  returning `None` and reading as "not stale".
+- **Degraded builds no longer clobber the served baseline**: a build that
+  records errors *and* loses most/all of its object inventory is classified
+  `degraded`, writes a forensic history snapshot, but leaves `latest.json`
+  pointing at the last good snapshot (prevents mass false `removed_table` drift
+  and an empty inventory feeding downstream gates). The build summary gains
+  `status` (`success`/`partial`/`degraded`) and `latest_updated`.
+- **`object_id` is fixed as `warehouse://…`** regardless of `WAREHOUSE_TYPE`, so
+  enabling the Snowflake reader no longer rewrites every id (which mass-fired
+  drift and orphaned persisted references).
+- **Clients/extractors**: Fivetran pagination tolerates `items: null`; dbt
+  auth/permission/rate-limit errors are fatal for the whole extraction (mirrors
+  Fivetran) instead of degrading into a silently dbt-empty snapshot; the
+  Activations paginator returns the records already fetched (with a warning and a
+  repeated-page guard) at its page cap instead of discarding them.
+- **Serving auth**: a non-ASCII API-key header returns 401 instead of a 500
+  (bytewise `compare_digest`); `serve-api`/`serve-mcp` refuse to start on a
+  non-loopback host without an API key (`METADATA_ALLOW_UNAUTHENTICATED=1` opts
+  out for proxy-fronted deploys) — closing the empty-key fail-open and the
+  entirely-unauthenticated MCP HTTP transport.
+- **Normalizer joins**: composite-PK tables can satisfy `has_primary_key_tests`
+  via a combination-uniqueness test; a null-filled dbt freshness dict is no
+  longer reported as freshness coverage; a configured alias to a dbt model beats
+  a coincidental source name hit; duplicate lowercased `object_id`s no longer
+  corrupt activation attachment (keyed by object identity); `metric_quality`
+  counts distinct failing tests (no N-fold inflation); a dbt index collision’s
+  loser is indexed nowhere (consistent with the warning); the column-lineage
+  scoped tier marks cross-database ambiguity; `get_column_impact` includes an
+  activation reading a dbt source directly; `last_synced_at` reflects a real run
+  timestamp (or null) instead of the config-edit time, with the edit time moved
+  to `config_updated_at`.
+
 ### Added
 - `examples/dq_middleware/` — a functionally complete toy **DQ policy
   middleware** demonstrating how a DQaaS platform consumes the snapshot
