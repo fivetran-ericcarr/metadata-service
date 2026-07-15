@@ -24,7 +24,24 @@ logger = logging.getLogger(__name__)
 _LATEST = "latest.json"
 # Only files shaped like snapshot timestamps count as snapshots — a stray
 # aliases.json or editor backup must not become drift's "previous" baseline.
-_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.json$")
+# The optional -\d{6} tail is the microsecond component (older second-resolution
+# names remain valid).
+_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(-\d{6})?Z\.json$")
+
+
+def _fsync_dir(path: Path) -> None:
+    """fsync a directory so a rename into it survives a crash. Best-effort:
+    some platforms (e.g. Windows) can't fsync a directory handle."""
+    try:
+        dir_fd = os.open(str(path), os.O_RDONLY)
+    except OSError:  # pragma: no cover - platform dependent
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:  # pragma: no cover
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def _write_atomic(path: Path, payload: str) -> None:
@@ -32,13 +49,19 @@ def _write_atomic(path: Path, payload: str) -> None:
 
     latest.json is read concurrently by the REST API and MCP server; a plain
     write_text truncates in place, so a crash or concurrent read mid-write
-    would break every consumer at once.
+    would break every consumer at once. The temp file and its directory are
+    fsync'd so a rename that survives a crash points at fully-written data
+    (without the fsync the rename can be journaled before the data blocks,
+    leaving a truncated/zero-length snapshot after power loss).
     """
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp_name, path)
+        _fsync_dir(path.parent)
     except BaseException:
         try:
             os.unlink(tmp_name)

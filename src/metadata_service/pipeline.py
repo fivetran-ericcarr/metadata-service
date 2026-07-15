@@ -7,6 +7,7 @@ JSON fixtures instead of calling live APIs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -33,6 +34,65 @@ logger = logging.getLogger(__name__)
 _REFRESH_LOCK = threading.Lock()
 
 
+def _acquire_file_lock(settings: Settings):
+    """Best-effort cross-process build lock: an exclusive advisory flock on a
+    lockfile in the snapshot directory. Serializes builds across processes on the
+    same host (the common CLI-cron + serve-api + serve-mcp deployment).
+
+    Returns an open file handle to hold, or None when file locking is
+    unavailable (non-POSIX platform, or the directory can't be created).
+    Cross-HOST serialization (e.g. many S3 writers) still needs external
+    coordination — this does not provide it.
+    """
+    try:
+        import fcntl  # noqa: PLC0415 - POSIX only
+    except ImportError:  # pragma: no cover - non-POSIX
+        return None
+    lock_dir = Path(settings.metadata_local_path or ".")
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_dir / ".build.lock", "w")  # noqa: SIM115 - held for the build
+    except OSError:  # pragma: no cover - defensive
+        return None
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise RefreshInProgressError(
+            "A metadata build is already running (build lock held by another process)."
+        ) from exc
+    return fh
+
+
+def _release_file_lock(fh) -> None:
+    try:
+        import fcntl  # noqa: PLC0415
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):  # pragma: no cover
+        pass
+    finally:
+        fh.close()
+
+
+@contextlib.contextmanager
+def _build_lock(settings: Settings):
+    """Hold the in-process lock AND a cross-process file lock for one build."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        raise RefreshInProgressError("A metadata build is already running in this process.")
+    try:
+        file_lock = _acquire_file_lock(settings)
+    except BaseException:
+        _REFRESH_LOCK.release()
+        raise
+    try:
+        yield
+    finally:
+        if file_lock is not None:
+            _release_file_lock(file_lock)
+        _REFRESH_LOCK.release()
+
+
 def build_metadata(
     settings: Settings,
     *,
@@ -49,43 +109,57 @@ def build_metadata(
     enrich_warehouse: bool = True,
 ) -> dict:
     """Run extraction + normalization and return the normalized document."""
+    enrichment = "not_requested"
     if fixtures_dir:
         fivetran_raw, dbt_raw, activations_raw = _load_fixture_payloads(Path(fixtures_dir))
+        # Fixtures mode always loads all three payloads regardless of include_*,
+        # so the *effective* coverage is whatever the fixture set provides.
+        eff_fivetran, eff_dbt, eff_activations = True, True, True
     else:
+        eff_fivetran = include_fivetran
         fivetran_raw = (
             _extract_fivetran(settings, group_id, connected_only=connected_only, skip_paused=skip_paused)
             if include_fivetran
             else _empty_fivetran()
         )
-        dbt_raw = (
-            _extract_dbt(settings, project_id=dbt_project_id, job_id=dbt_job_id)
-            if include_dbt
-            else _empty_dbt()
-        )
-        activations_raw = (
-            _extract_activations(settings)
-            if include_activations and settings.activations_enabled()
-            else _empty_activations()
-        )
+        # dbt degrades like activations when its credentials are absent, instead
+        # of aborting the whole build — a Fivetran-only deployment must still
+        # produce a snapshot.
+        eff_dbt = include_dbt and settings.dbt_enabled()
+        if eff_dbt:
+            dbt_raw = _extract_dbt(settings, project_id=dbt_project_id, job_id=dbt_job_id)
+        else:
+            dbt_raw = _empty_dbt()
+            if include_dbt and not settings.dbt_enabled():
+                dbt_raw["errors"].append({
+                    "source": "dbt", "error_type": "DbtNotConfigured",
+                    "error_message": "dbt was requested but DBT_ACCOUNT_ID/DBT_SERVICE_TOKEN "
+                                     "are not set; skipped (no dbt metadata in this snapshot).",
+                })
+        eff_activations = include_activations and settings.activations_enabled()
+        activations_raw = _extract_activations(settings) if eff_activations else _empty_activations()
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
     if enrich_warehouse and not fixtures_dir and include_fivetran:
-        _enrich_primary_keys(settings, fivetran_norm)
+        enrichment = _enrich_primary_keys(settings, fivetran_norm)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
     activations_norm = ActivationsNormalizer().normalize(activations_raw)
     doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm, activations_norm)
-    # Record what this build covered so drift only compares like-for-like — a
-    # scoped/partial run diffed against a full baseline mass-fires removed_table.
+    # Record what this build ACTUALLY covered (effective flags, not just what was
+    # requested) so drift only compares like-for-like — a scoped/partial run
+    # diffed against a full baseline mass-fires removed_table, and a build where a
+    # source silently degraded must not diff as if that source were present.
     doc["build_scope"] = {
         "group_id": group_id,
-        "include_fivetran": include_fivetran,
-        "include_dbt": include_dbt,
-        "include_activations": include_activations,
+        "include_fivetran": eff_fivetran,
+        "include_dbt": eff_dbt,
+        "include_activations": eff_activations,
         "connected_only": connected_only,
         "skip_paused": skip_paused,
         "dbt_project_id": dbt_project_id,
         "dbt_job_id": dbt_job_id,
         "fixtures": bool(fixtures_dir),
+        "pk_enrichment": enrichment,
     }
     logger.info(
         "Built metadata: %s warehouse objects, %s recommendations, %s errors",
@@ -124,9 +198,7 @@ def build_and_store(
     """
     from .dq.drift import detect_drift  # local import to avoid cycles
 
-    if not _REFRESH_LOCK.acquire(blocking=False):
-        raise RefreshInProgressError("A metadata build is already running in this process.")
-    try:
+    with _build_lock(settings):
         storage = get_storage(settings)
         previous = storage.read_latest()
 
@@ -164,18 +236,16 @@ def build_and_store(
                 )
         else:
             logger.info("Snapshot NOT persisted (write_latest=False); latest.json unchanged.")
-    finally:
-        _REFRESH_LOCK.release()
 
-    return {
-        "status": status,
-        "latest_updated": bool(uri) and status != "degraded",
-        "snapshot_uri": uri,
-        "generated_at": doc.get("generated_at"),
-        "object_count": len(doc.get("warehouse_objects", [])),
-        "error_count": len(doc.get("errors", [])),
-        "doc": doc,
-    }
+        return {
+            "status": status,
+            "latest_updated": bool(uri) and status != "degraded",
+            "snapshot_uri": uri,
+            "generated_at": doc.get("generated_at"),
+            "object_count": len(doc.get("warehouse_objects", [])),
+            "error_count": len(doc.get("errors", [])),
+            "doc": doc,
+        }
 
 
 # Fraction of the previous snapshot's object inventory a build must retain to be
@@ -216,28 +286,40 @@ def _extract_fivetran(
         )
 
 
-def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> None:
-    """Override PK flags from the Platform Connector's fivetran_metadata (best-effort)."""
+def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> str:
+    """Override PK flags from the Platform Connector's fivetran_metadata
+    (best-effort). Returns the enrichment outcome for build_scope:
+    ``unavailable`` (no reader configured), ``ran`` (applied), or ``failed``.
+
+    The reader construction is inside the guard too: a misconfigured reader
+    (e.g. a bad WAREHOUSE_DATABASE) must not abort the whole build — enrichment
+    is best-effort. The outcome is recorded in build_scope so a build where
+    enrichment silently didn't run isn't drift-compared against one where it did
+    (which would mass-fire primary_key_changed in both directions)."""
     from .warehouse import apply_primary_keys, get_warehouse_reader
 
-    reader = get_warehouse_reader(settings)
-    if reader is None:
-        return
-    connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", []) if c.get("connection_id")]
+    reader = None
     try:
+        reader = get_warehouse_reader(settings)
+        if reader is None:
+            return "unavailable"
+        connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", [])
+                          if c.get("connection_id")]
         pk_map = reader.read_primary_keys(connection_ids or None)
         updated = apply_primary_keys(fivetran_norm, pk_map)
         logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
+        return "ran"
     except Exception as exc:  # never fail the build on enrichment
-        # The reader was EXPLICITLY configured (warehouse_reader_enabled gated
-        # entry), so a silent skip means PKs quietly stop being authoritative —
-        # log at ERROR, not a warning nobody reads.
+        # The reader was EXPLICITLY configured, so a silent skip means PKs quietly
+        # stop being authoritative — log at ERROR, not a warning nobody reads.
         logger.error("Warehouse PK enrichment FAILED (reader is configured): %s", exc)
+        return "failed"
     finally:
-        try:
-            reader.close()
-        except Exception:  # pragma: no cover
-            pass
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception:  # pragma: no cover
+                pass
 
 
 def _extract_activations(settings: Settings) -> dict:

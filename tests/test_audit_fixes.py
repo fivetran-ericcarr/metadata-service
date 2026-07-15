@@ -264,3 +264,181 @@ def test_last_synced_at_is_not_config_edit_time():
                        "source_attributes": {}, "destination_attributes": {}, "mappings": []}]}
     s2 = ActivationsNormalizer().normalize(raw2)["syncs"][0]
     assert s2["last_synced_at"] == "2026-07-10T09:00:00Z"
+
+
+# ---- Storage durability -------------------------------------------------------
+def test_default_snapshot_names_are_collision_free(tmp_path):
+    from metadata_service.storage.local_storage import LocalStorage
+
+    storage = LocalStorage(str(tmp_path))
+    storage.write_snapshot({"generated_at": "2026-07-01T00:00:00Z"})  # default (microsecond) name
+    storage.write_snapshot({"generated_at": "2026-07-01T00:00:00Z"})  # same second
+    assert len(storage.list_snapshots()) == 2  # distinct history files, neither overwritten
+
+
+def test_snapshot_written_data_is_flushed(tmp_path):
+    # A written snapshot is fully readable (exercises the fsync path end-to-end).
+    from metadata_service.storage.local_storage import LocalStorage
+
+    storage = LocalStorage(str(tmp_path))
+    storage.write_snapshot({"generated_at": "2026-07-01T00:00:00Z", "n": 1},
+                           snapshot_name="2026-07-01T00-00-00Z")
+    assert storage.read_latest()["n"] == 1
+
+
+class _FakeS3:
+    class exceptions:
+        class NoSuchKey(Exception):
+            pass
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, Bucket, Key, Body, ContentType):
+        self.objects[Key] = Body
+
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise self.exceptions.NoSuchKey()
+        import io
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def delete_object(self, Bucket, Key):
+        self.objects.pop(Key, None)
+
+    def get_paginator(self, name):
+        objects = self.objects
+
+        class P:
+            def paginate(self, Bucket, Prefix):
+                yield {"Contents": [{"Key": k} for k in sorted(objects) if k.startswith(Prefix)]}
+        return P()
+
+
+def test_s3_prefix_boundary_isolates_sibling_deployments():
+    from metadata_service.storage.s3_storage import S3Storage
+
+    shared = _FakeS3()
+    prod = S3Storage("bkt", "metadata", client=shared, retain=2)
+    # A sibling deployment on a prefix that shares the stem.
+    other = S3Storage("bkt", "metadata-prod", client=shared, retain=2)
+    for i in range(3):
+        prod.write_snapshot({"generated_at": f"2026-07-0{i+1}T00:00:00Z", "n": i},
+                            snapshot_name=f"2026-07-0{i+1}T00-00-00Z")
+    other.write_snapshot({"generated_at": "2026-07-01T00:00:00Z", "who": "other"},
+                         snapshot_name="2026-07-01T00-00-00Z")
+
+    # prod's view must not include the sibling's key, and retention (2) must not
+    # have deleted the sibling's snapshot.
+    assert all("metadata-prod" not in k for k in prod.list_snapshots())
+    assert len(prod.list_snapshots()) == 2
+    assert "metadata-prod/2026/07/01/2026-07-01T00-00-00Z.json" in shared.objects
+
+
+# ---- Concurrency --------------------------------------------------------------
+def test_build_lock_serializes_cross_process(tmp_path):
+    # The file lock is held for the duration of a build; a second acquisition
+    # from a would-be concurrent process is refused.
+    import metadata_service.pipeline as pipeline
+    from metadata_service.exceptions import RefreshInProgressError
+
+    settings = Settings(metadata_storage_backend="local", metadata_local_path=str(tmp_path))
+    with pipeline._build_lock(settings):
+        # Simulate another process: a fresh flock on the same lockfile must fail.
+        import fcntl
+        fh = open(tmp_path / ".build.lock", "w")
+        try:
+            with pytest.raises(OSError):
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            fh.close()
+    # Released after the block: a new build lock acquires cleanly.
+    with pipeline._build_lock(settings):
+        pass
+
+
+def test_mcp_read_tools_are_async_offloaded():
+    # Every read tool must be a coroutine so FastMCP doesn't run blocking storage
+    # I/O inline on the event loop (only refresh was threaded before).
+    import inspect
+
+    from metadata_service.mcp import server as mcp_server
+
+    tools_registered = mcp_server.build_server()._tool_manager.list_tools()
+    assert tools_registered, "no MCP tools registered"
+    assert all(inspect.iscoroutinefunction(t.fn) for t in tools_registered)
+
+
+# ---- Pipeline-scope accuracy --------------------------------------------------
+def test_dbt_degrades_when_unconfigured_instead_of_aborting():
+    from metadata_service.pipeline import build_metadata
+
+    # Pin creds empty so the developer's .env can't supply real dbt tokens.
+    settings = Settings(warehouse_type="warehouse", dbt_account_id=None, dbt_service_token=None)
+    doc = build_metadata(settings, include_fivetran=False, include_dbt=True,
+                         include_activations=False, enrich_warehouse=False)
+    # Effective scope reflects that dbt did NOT run (not the requested True).
+    assert doc["build_scope"]["include_dbt"] is False
+    assert any(e.get("error_type") == "DbtNotConfigured" for e in doc["errors"])
+
+
+def test_fixtures_build_scope_reflects_content_not_requested_flags():
+    from metadata_service.pipeline import build_metadata
+
+    settings = Settings(warehouse_type="warehouse", stale_sync_threshold_hours=24)
+    a = build_metadata(settings, fixtures_dir=str(FIXTURES), include_dbt=True)
+    b = build_metadata(settings, fixtures_dir=str(FIXTURES), include_dbt=False)
+    # Fixtures load all payloads regardless of include_*, so two fixture builds
+    # have identical scope and remain drift-comparable.
+    assert a["build_scope"] == b["build_scope"]
+    assert a["build_scope"]["include_dbt"] is True
+
+
+def test_drift_scope_mismatch_emits_skipped_marker():
+    from metadata_service.dq.drift import detect_drift
+
+    def doc(scope, objs):
+        return {"build_scope": scope,
+                "warehouse_objects": [{"object_id": o, "origin": {}, "columns": [], "dbt": {}}
+                                      for o in objs]}
+
+    records = detect_drift(doc({"include_dbt": True}, ["a", "b"]),
+                           doc({"include_dbt": False}, ["a"]))
+    assert [r["change_type"] for r in records] == ["comparison_skipped"]
+    assert records[0]["severity"] == "info"
+
+
+# ---- MCP serving mediums ------------------------------------------------------
+def test_mcp_refuses_schema_version_mismatch(monkeypatch):
+    from metadata_service.mcp import tools
+
+    class _Store:
+        def read_latest(self):
+            return {"version": "9.9", "warehouse_objects": []}
+
+    monkeypatch.setattr(tools, "get_storage", lambda s: _Store())
+    with pytest.raises(tools.MetadataUnavailable, match="schema version"):
+        tools._latest(Settings())
+
+
+def test_get_latest_metadata_rejects_unknown_scope():
+    from metadata_service.mcp import tools
+
+    out = tools.get_latest_metadata("activations", settings=Settings())  # plausible typo
+    assert "error" in out and "Unknown scope" in out["error"]
+
+
+def test_warehouse_object_route_is_case_insensitive(monkeypatch, tmp_path):
+    settings = Settings(metadata_storage_backend="local", metadata_local_path=str(tmp_path),
+                        warehouse_type="warehouse", stale_sync_threshold_hours=24)
+    monkeypatch.setattr("metadata_service.api.routes.get_settings", lambda: settings)
+    build_and_store(settings, fixtures_dir=str(FIXTURES))
+    from metadata_service.api.main import create_app
+
+    client = TestClient(create_app())
+    # A real object id is lower-cased; request it upper-cased.
+    objs = client.get("/metadata/warehouse-objects").json()["warehouse_objects"]
+    schema, name = objs[0]["schema"], objs[0]["name"]
+    resp = client.get(f"/metadata/warehouse-objects/{schema.upper()}/{name.upper()}")
+    assert resp.status_code == 200
+    assert resp.json()["object_id"] == objs[0]["object_id"]

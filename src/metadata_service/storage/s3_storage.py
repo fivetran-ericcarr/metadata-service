@@ -18,7 +18,8 @@ from ..models.common import snapshot_timestamp
 logger = logging.getLogger(__name__)
 
 _LATEST = "latest.json"
-_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.json$")
+# Optional -\d{6} tail is the microsecond component (older names stay valid).
+_SNAPSHOT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(-\d{6})?Z\.json$")
 
 
 class S3Storage:
@@ -81,9 +82,13 @@ class S3Storage:
 
     # -- internals --------------------------------------------------------
     def _snapshot_keys(self) -> list[str]:
+        # Anchor the prefix at a path boundary ("metadata/", not "metadata") so a
+        # sibling prefix like "metadata-prod/" is not scanned — otherwise retention
+        # could prune, and read_previous could return, another deployment's snapshots.
+        list_prefix = f"{self._prefix}/" if self._prefix else ""
         keys: list[str] = []
         paginator = self._s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix=self._prefix):
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=list_prefix):
             for obj in page.get("Contents", []) or []:
                 key = obj["Key"]
                 if _SNAPSHOT_NAME.match(key.rsplit("/", 1)[-1]):

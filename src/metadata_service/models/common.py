@@ -25,8 +25,12 @@ def utcnow_iso() -> str:
 
 
 def snapshot_timestamp() -> str:
-    """Filesystem-safe UTC timestamp, e.g. ``2026-06-25T12-34-56Z``."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    """Filesystem-safe UTC timestamp, e.g. ``2026-06-25T12-34-56-123456Z``.
+
+    Microsecond resolution so two builds in the same wall-clock second don't
+    generate the same filename and silently overwrite one snapshot's history.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
 
 
 def build_object_id(

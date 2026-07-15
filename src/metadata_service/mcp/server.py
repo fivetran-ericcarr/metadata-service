@@ -36,18 +36,41 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(_INSTALL_HINT) from exc
 
+    import anyio
+
+    from .tools import MetadataUnavailable
+
     server = FastMCP("fivetran-dbt-metadata", host=host, port=port)
+
+    async def _threaded(fn, *args):
+        """Run a blocking tool (storage read + full-document JSON parse) in a
+        worker thread so a slow read doesn't freeze every other session on the
+        HTTP transports — the read tools are otherwise invoked inline on the
+        event loop.
+
+        Error detail is sanitized before it leaves the server: a Metadata
+        Unavailable message is curated and safe to show, but any other exception
+        (e.g. a StorageError embedding a filesystem path, or an httpx error with
+        an internal host) is logged server-side and replaced with a generic
+        message — the HTTP transports may be reachable by untrusted clients."""
+        try:
+            return await anyio.to_thread.run_sync(lambda: fn(*args))
+        except MetadataUnavailable:
+            raise  # safe, curated message
+        except Exception as exc:
+            logger.exception("MCP tool %s failed", getattr(fn, "__name__", fn))
+            raise RuntimeError(f"{getattr(fn, '__name__', 'tool')} failed; see server logs.") from exc
 
     # --- Orientation / discovery (compact, agent-friendly) ----------------
     @server.tool()
-    def get_dq_summary() -> dict:
+    async def get_dq_summary() -> dict:
         """Account-level DQ rollup: object counts by risk, missing coverage,
         failing tests, stale syncs, recommendations by type/confidence, and drift.
         The first call an agent makes to orient itself."""
-        return tools.get_dq_summary()
+        return await _threaded(tools.get_dq_summary)
 
     @server.tool()
-    def list_warehouse_objects(
+    async def list_warehouse_objects(
         schema: str | None = None,
         risk_level: str | None = None,
         missing_coverage: bool | None = None,
@@ -62,59 +85,59 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         missing_coverage, failing_tests, warn_test_failures (warn-severity tests
         firing while the run stays green), stale. limit+offset paginate.
         get_warehouse_object for detail."""
-        return tools.list_warehouse_objects(
-            schema, risk_level, missing_coverage, failing_tests,
-            warn_test_failures, stale, limit, offset
+        return await _threaded(
+            tools.list_warehouse_objects, schema, risk_level, missing_coverage,
+            failing_tests, warn_test_failures, stale, limit, offset
         )
 
     # --- Detail -----------------------------------------------------------
     @server.tool()
-    def get_warehouse_object(schema: str, table: str) -> dict:
+    async def get_warehouse_object(schema: str, table: str) -> dict:
         """Return a single warehouse object (full detail) by schema + table."""
-        return tools.get_warehouse_object(schema, table)
+        return await _threaded(tools.get_warehouse_object, schema, table)
 
     @server.tool()
-    def get_impact(schema: str, table: str) -> dict:
+    async def get_impact(schema: str, table: str) -> dict:
         """Blast radius for an object: downstream dbt models + exposures
         (dashboards/ML/apps) that depend on it. 'What breaks if this is wrong?'"""
-        return tools.get_impact(schema, table)
+        return await _threaded(tools.get_impact, schema, table)
 
     @server.tool()
-    def get_column_impact(schema: str, table: str, column: str) -> dict:
+    async def get_column_impact(schema: str, table: str, column: str) -> dict:
         """Column-level blast radius: downstream model columns a Fivetran column
         feeds (via parsed SQL lineage), plus affected metrics and exposures."""
-        return tools.get_column_impact(schema, table, column)
+        return await _threaded(tools.get_column_impact, schema, table, column)
 
     @server.tool()
-    def list_metrics() -> dict:
+    async def list_metrics() -> dict:
         """Semantic Layer metrics with a trust level (trusted|watch|at_risk) from
         the DQ posture of their upstream objects."""
-        return tools.list_metrics()
+        return await _threaded(tools.list_metrics)
 
     @server.tool()
-    def get_metric_quality(metric: str) -> dict:
+    async def get_metric_quality(metric: str) -> dict:
         """Trust detail for one governed metric: upstream objects + failing tests."""
-        return tools.get_metric_quality(metric)
+        return await _threaded(tools.get_metric_quality, metric)
 
     # --- Activations (reverse ETL) ----------------------------------------
     @server.tool()
-    def list_activations(verdict: str | None = None) -> dict:
+    async def list_activations(verdict: str | None = None) -> dict:
         """Reverse-ETL activations with a readiness verdict (allow|warn|block|
         unknown): what data is being pushed back to operational systems, and is
         any of it unsafe? Filter by verdict."""
-        return tools.list_activations(verdict)
+        return await _threaded(tools.list_activations, verdict)
 
     @server.tool()
-    def get_activation_readiness(sync_id: str | None = None, label: str | None = None,
-                                 schema: str | None = None, table: str | None = None) -> dict:
+    async def get_activation_readiness(sync_id: str | None = None, label: str | None = None,
+                                       schema: str | None = None, table: str | None = None) -> dict:
         """Readiness detail for one activation: verdict + upstream reasons
         (failing/warn tests, staleness, missing contract) + destination field
         mappings. Address by sync_id, label, or the warehouse schema+table the
         sync reads. 'Is it safe to push this data back to prod?'"""
-        return tools.get_activation_readiness(sync_id, label, schema, table)
+        return await _threaded(tools.get_activation_readiness, sync_id, label, schema, table)
 
     @server.tool()
-    def get_dq_recommendations(
+    async def get_dq_recommendations(
         schema: str | None = None,
         table: str | None = None,
         recommendation_type: str | None = None,
@@ -126,27 +149,28 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         """DQ recommendations, filterable per-object (schema/table) or across the
         whole snapshot by recommendation_type (dbt_test|risk|signal),
         confidence (high|medium|heuristic), or risk. limit+offset paginate."""
-        return tools.get_dq_recommendations(
-            schema, table, recommendation_type, confidence, risk, limit, offset
+        return await _threaded(
+            tools.get_dq_recommendations, schema, table, recommendation_type,
+            confidence, risk, limit, offset
         )
 
     @server.tool()
-    def get_schema_drift(
+    async def get_schema_drift(
         schema: str | None = None,
         table: str | None = None,
         severity: str | None = None,
     ) -> dict:
         """Return schema drift records, optionally filtered by object and severity."""
-        return tools.get_schema_drift(schema, table, severity)
+        return await _threaded(tools.get_schema_drift, schema, table, severity)
 
     # --- Raw / bulk (use sparingly; large payloads) -----------------------
     @server.tool()
-    def get_latest_metadata(scope: str = "all") -> dict:
+    async def get_latest_metadata(scope: str = "all") -> dict:
         """Snapshot by scope. all = joined doc with raw source payloads replaced
         by counts (context-safe); fivetran|dbt = one raw section;
         warehouse_objects = the join; full = the verbatim ~1 MB document.
         Prefer get_dq_summary / list_warehouse_objects for triage."""
-        return tools.get_latest_metadata(scope)
+        return await _threaded(tools.get_latest_metadata, scope)
 
     # --- Action -----------------------------------------------------------
     @server.tool()
@@ -163,8 +187,6 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         the same scoping as the CLI build (group, dbt project, filters) so an
         agent-triggered refresh matches the scheduled one. Long-running (minutes
         on live accounts); returns {status: in_progress_error} if already running."""
-        import anyio
-
         from ..exceptions import RefreshInProgressError
 
         try:
@@ -179,6 +201,11 @@ def build_server(host: str = "127.0.0.1", port: int = 8765):
         except RefreshInProgressError:
             return {"status": "in_progress_error",
                     "message": "A refresh is already running; try again when it finishes."}
+        except Exception:
+            # Don't leak build internals (paths, hosts, tracebacks) to the client;
+            # log server-side and return a generic status (mirrors the REST layer).
+            logger.exception("MCP refresh_metadata failed")
+            return {"status": "error", "message": "Refresh failed; see server logs."}
 
     return server
 
