@@ -7,6 +7,7 @@ JSON fixtures instead of calling live APIs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -31,6 +32,65 @@ logger = logging.getLogger(__name__)
 # write, double-bill the source APIs, and compute drift against the same
 # previous snapshot.
 _REFRESH_LOCK = threading.Lock()
+
+
+def _acquire_file_lock(settings: Settings):
+    """Best-effort cross-process build lock: an exclusive advisory flock on a
+    lockfile in the snapshot directory. Serializes builds across processes on the
+    same host (the common CLI-cron + serve-api + serve-mcp deployment).
+
+    Returns an open file handle to hold, or None when file locking is
+    unavailable (non-POSIX platform, or the directory can't be created).
+    Cross-HOST serialization (e.g. many S3 writers) still needs external
+    coordination — this does not provide it.
+    """
+    try:
+        import fcntl  # noqa: PLC0415 - POSIX only
+    except ImportError:  # pragma: no cover - non-POSIX
+        return None
+    lock_dir = Path(settings.metadata_local_path or ".")
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_dir / ".build.lock", "w")  # noqa: SIM115 - held for the build
+    except OSError:  # pragma: no cover - defensive
+        return None
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise RefreshInProgressError(
+            "A metadata build is already running (build lock held by another process)."
+        ) from exc
+    return fh
+
+
+def _release_file_lock(fh) -> None:
+    try:
+        import fcntl  # noqa: PLC0415
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):  # pragma: no cover
+        pass
+    finally:
+        fh.close()
+
+
+@contextlib.contextmanager
+def _build_lock(settings: Settings):
+    """Hold the in-process lock AND a cross-process file lock for one build."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        raise RefreshInProgressError("A metadata build is already running in this process.")
+    try:
+        file_lock = _acquire_file_lock(settings)
+    except BaseException:
+        _REFRESH_LOCK.release()
+        raise
+    try:
+        yield
+    finally:
+        if file_lock is not None:
+            _release_file_lock(file_lock)
+        _REFRESH_LOCK.release()
 
 
 def build_metadata(
@@ -124,9 +184,7 @@ def build_and_store(
     """
     from .dq.drift import detect_drift  # local import to avoid cycles
 
-    if not _REFRESH_LOCK.acquire(blocking=False):
-        raise RefreshInProgressError("A metadata build is already running in this process.")
-    try:
+    with _build_lock(settings):
         storage = get_storage(settings)
         previous = storage.read_latest()
 
@@ -164,18 +222,16 @@ def build_and_store(
                 )
         else:
             logger.info("Snapshot NOT persisted (write_latest=False); latest.json unchanged.")
-    finally:
-        _REFRESH_LOCK.release()
 
-    return {
-        "status": status,
-        "latest_updated": bool(uri) and status != "degraded",
-        "snapshot_uri": uri,
-        "generated_at": doc.get("generated_at"),
-        "object_count": len(doc.get("warehouse_objects", [])),
-        "error_count": len(doc.get("errors", [])),
-        "doc": doc,
-    }
+        return {
+            "status": status,
+            "latest_updated": bool(uri) and status != "degraded",
+            "snapshot_uri": uri,
+            "generated_at": doc.get("generated_at"),
+            "object_count": len(doc.get("warehouse_objects", [])),
+            "error_count": len(doc.get("errors", [])),
+            "doc": doc,
+        }
 
 
 # Fraction of the previous snapshot's object inventory a build must retain to be
