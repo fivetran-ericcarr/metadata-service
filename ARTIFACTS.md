@@ -93,7 +93,8 @@ The primary artifact. Top-level shape:
   "metric_quality": [ ... ],
   "activations": { ... },
   "schema_drift": [ ... ],
-  "errors": [ ... ]
+  "errors": [ ... ],
+  "build_scope": { ... }
 }
 ```
 
@@ -109,6 +110,7 @@ The primary artifact. Top-level shape:
 | `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
+| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment}`. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
 
 ### 2.1 `sources.fivetran`
 
@@ -250,8 +252,8 @@ downstream models.
 | `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, else `null` |
 | `columns[].dbt_tests` | dbt test types already present on that column |
 | `columns[].recommended_tests` | Test names recommended for that column (see 2.4) |
-| `match_confidence` | `exact_relation`, `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched` |
-| `dq_summary.failing_tests_count` | Tests with status `fail`/`error` (the dbt run is red) |
+| `match_confidence` | `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched`. (`exact_relation` is reserved for a future database-qualified match tier and is not currently produced.) |
+| `dq_summary.failing_tests_count` | Tests with status `fail`/`error`/`runtime error`, **plus** a failing source-freshness check (the dbt run is red or the source is stale past its freshness policy) |
 | `dq_summary.warn_tests_with_failures_count` | Warn-severity tests that are **firing** (failing rows while the run stays green) — the reverse-ETL trap; triage-visible, and the activation gate blocks on it |
 | `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if warn tests are firing, recommendations exist, PK tests are missing, or unmatched) |
 
@@ -349,7 +351,9 @@ Beyond models/sources/tests, each `warehouse_objects[].dbt` may carry:
 - `exposures[]` — dashboards/ML/apps it feeds (blast radius). Doc-level
   `sources.dbt.exposures` lists all.
 - `metrics[]` — Semantic Layer metrics it feeds. Doc-level `metric_quality[]` gives a
-  per-metric `trust_level` (trusted|watch|at_risk) from upstream DQ posture.
+  per-metric `trust_level` (`trusted`|`watch`|`at_risk`|`unknown`) from upstream DQ
+  posture; `unknown` means the metric has no matched upstream warehouse object to
+  judge it on. `failing_tests` counts distinct failing tests across the upstream.
 - `governance` — `{has_enforced_contract, owners, groups, access_levels,
   uncontracted_public_models}`.
 - `sources.dbt.column_lineage_edges` — `{from_unique_id, from_column, to_unique_id,
@@ -382,8 +386,12 @@ Differences between this snapshot and the previous one.
 | `destination_name_changed` | high |
 | `dbt_test_added` | low |
 | `dbt_test_removed` | high |
-| `dbt_test_status_changed` | high |
-| `freshness_status_changed` | high |
+| `dbt_test_status_changed` | high when the status changed *into* a bad state (→ fail/error/warn); `low` for a recovery (fail → pass) |
+| `freshness_status_changed` | high when the status changed *into* a bad state; `low` for a recovery |
+
+A `comparison_skipped` record (severity `info`) is emitted instead of the above
+when the two snapshots' `build_scope` differs — drift was not evaluated, as
+opposed to evaluated-and-clean.
 
 ### 2.6 `errors[]`
 
@@ -437,7 +445,8 @@ upstream) and `tests_with_results` (those with a run result).
 
 Each warehouse object the sync consumes also carries a compact
 `warehouse_objects[].activations[]` back-reference (`sync_id`, `label`,
-`destination_name`, `destination_object`, `readiness_verdict`), and objects
+`destination_name`, `destination_type`, `destination_object`, `paused`,
+`readiness_verdict`), and objects
 feeding a `block`/`warn` sync raise an `activates_bad_data` risk in
 `dq_recommendations`; an `unknown`-verdict sync with a named source object raises
 `activates_unverified_data` (medium) — data pushed to prod with no quality
