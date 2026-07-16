@@ -12,7 +12,6 @@ CONFIDENCE_MEDIUM = "medium"
 CONFIDENCE_HEURISTIC = "heuristic"
 
 # Match confidence levels for joining Fivetran and dbt objects.
-MATCH_EXACT_RELATION = "exact_relation"
 MATCH_EXACT_SCHEMA_TABLE = "exact_schema_table"
 MATCH_CASE_INSENSITIVE = "case_insensitive_schema_table"
 MATCH_CONFIGURED_ALIAS = "configured_alias"

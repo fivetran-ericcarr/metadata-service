@@ -292,14 +292,16 @@ Top-level snapshot shape (`latest.json`):
   "warehouse_objects": [],
   "dq_recommendations": [],
   "metric_quality": [],
+  "activations": { "syncs": [], "summary": {} },
   "schema_drift": [],
-  "errors": []
+  "errors": [],
+  "build_scope": {}
 }
 ```
 
 Each `warehouse_objects` entry joins Fivetran + dbt with `origin`, `dbt`,
 `columns`, a `dq_summary`, and a `match_confidence` of one of:
-`exact_relation`, `exact_schema_table`, `case_insensitive_schema_table`,
+`exact_schema_table`, `case_insensitive_schema_table`,
 `configured_alias`, `unmatched`. See `models/normalized.py` for the full model.
 
 Recommendations carry a `confidence` of `high`, `medium`, or `heuristic`, keeping

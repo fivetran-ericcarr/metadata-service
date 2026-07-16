@@ -27,12 +27,11 @@ Policy (deterministic, fail-closed):
 from __future__ import annotations
 
 from .lineage import LineageGraph
-
-_FAILING_STATUSES = {"fail", "error", "runtime error"}
+from .status import FAILING_STATUSES, is_failing_status
 
 
 def _is_failing(test: dict) -> bool:
-    return (test.get("status") or "").lower() in _FAILING_STATUSES
+    return is_failing_status(test.get("status"))
 
 
 def _is_warn_with_failures(test: dict) -> bool:
@@ -185,7 +184,7 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
     for uid in upstream_sources:
         src = sources_by_uid.get(uid) or {}
         fr = src.get("freshness_result") or {}
-        if (fr.get("status") or "").lower() in _FAILING_STATUSES:
+        if (fr.get("status") or "").lower() in FAILING_STATUSES:
             failing += 1
             failing_detail.append({"node": uid, "test": "source_freshness", "status": fr.get("status")})
         for test in src.get("tests") or []:
