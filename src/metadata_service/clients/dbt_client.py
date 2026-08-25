@@ -4,7 +4,15 @@ Covers the Admin API v2 (projects, environments, jobs, runs, artifacts) and an
 optional Discovery/Metadata GraphQL layer when ``DBT_METADATA_API_URL`` is set.
 
 Auth is encapsulated in ``_auth_headers`` so the scheme can change in one place.
-Current dbt Cloud service tokens use ``Authorization: Token <token>``.
+
+Classic multi-tenant accounts (``cloud.getdbt.com``) have historically accepted
+``Authorization: Token <token>``. Cell-based/regional dbt Platform accounts
+(``https://<prefix>.<region>.dbt.com``, e.g. ``us1.dbt.com``) reject ``Token``
+with a 401 and require ``Authorization: Bearer <token>`` instead. This client
+now standardizes on ``Bearer`` unconditionally, matching what ``query_discovery``
+and the Activations client already send. If a classic multi-tenant account is
+ever found to reject ``Bearer``, this should become conditional on
+``dbt_base_url`` instead of unconditional.
 """
 
 from __future__ import annotations
@@ -61,8 +69,12 @@ class DbtClient:
 
     @staticmethod
     def _auth_headers(token: str) -> dict[str, str]:
-        """Single place that defines the dbt Cloud auth scheme."""
-        return {"Authorization": f"Token {token}", "Accept": "application/json"}
+        """Single place that defines the dbt Cloud auth scheme.
+
+        Uses ``Bearer`` unconditionally — required by cell-based/regional hosts,
+        and also accepted by classic multi-tenant accounts.
+        """
+        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     # -- lifecycle --------------------------------------------------------
     def close(self) -> None:
