@@ -473,15 +473,24 @@ class CombinedNormalizer:
 
     @staticmethod
     def _build_columns(table, source_obj, model_uids, models_by_uid, object_tests) -> list[dict]:
-        # dbt column descriptions keyed by lowercased column name.
+        # dbt column descriptions + data types keyed by lowercased column name.
+        # The matched source is walked first so its (physical, raw-table) type
+        # wins over a downstream model's cast of the same column name.
         dbt_desc: dict[str, str] = {}
-        for col in (source_obj or {}).get("columns") or []:
+        dbt_type: dict[str, str] = {}
+
+        def absorb(col: dict) -> None:
+            lname = (col.get("name") or "").lower()
             if col.get("description"):
-                dbt_desc.setdefault((col.get("name") or "").lower(), col["description"])
+                dbt_desc.setdefault(lname, col["description"])
+            if col.get("data_type"):
+                dbt_type.setdefault(lname, col["data_type"])
+
+        for col in (source_obj or {}).get("columns") or []:
+            absorb(col)
         for uid in model_uids:
             for col in (models_by_uid.get(uid) or {}).get("columns") or []:
-                if col.get("description"):
-                    dbt_desc.setdefault((col.get("name") or "").lower(), col["description"])
+                absorb(col)
 
         # tests per column (by attached_column).
         tests_by_col: dict[str, list[str]] = {}
@@ -502,6 +511,7 @@ class CombinedNormalizer:
                 {
                     "name": name,
                     "source_name": col.get("source_name"),
+                    "data_type": dbt_type.get(lname),
                     "enabled": col.get("enabled", True),
                     "is_primary_key": col.get("is_primary_key", False),
                     "key_constraint": col.get("key_constraint"),
