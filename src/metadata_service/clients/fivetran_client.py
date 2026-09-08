@@ -178,4 +178,54 @@ class FivetranClient:
     def get_connector_type(self, service: str) -> dict:
         return self._get_data(f"/metadata/connector-types/{quote(service, safe='')}")
 
+    def get_destination(self, destination_id: str) -> dict:
+        """GET /v1/destinations/{id} -> the destination record (incl. ``config``)."""
+        return self._get_data(f"/destinations/{quote(destination_id, safe='')}")
+
+    def list_destinations(self) -> list[dict]:
+        """GET /v1/destinations -> every destination in the account.
+
+        The endpoint takes no ``group_id`` filter, so callers that want one
+        group's destination must filter client-side (see
+        :meth:`find_destination_for_group`). Note the list payload omits
+        ``config``; only the by-id GET returns it.
+        """
+        return self._get_paginated("/destinations")
+
+    def find_destination_for_group(self, group_id: str) -> dict | None:
+        """Resolve the destination belonging to ``group_id``, or None.
+
+        Fivetran documents ``id`` and ``group_id`` as distinct identifiers and
+        offers no ``group_id`` filter on the collection, so this tries the direct
+        GET first (destination ids are in practice equal to the group id) and only
+        falls back to walking the account-wide list on a 404. The fallback also
+        re-fetches by id, because the list payload carries no ``config``.
+        """
+        if not group_id:
+            return None
+        try:
+            destination = self.get_destination(group_id)
+        except FivetranNotFoundError:
+            logger.debug("No destination with id %s; scanning account destinations.", group_id)
+        else:
+            if isinstance(destination, dict) and destination:
+                return destination
+
+        matches = [d for d in self.list_destinations() if d.get("group_id") == group_id]
+        if not matches:
+            logger.warning("No Fivetran destination found for group %s.", group_id)
+            return None
+        if len(matches) > 1:
+            # Fivetran is moving toward multiple destinations per group; picking
+            # one arbitrarily would silently point the warehouse reader at the
+            # wrong database, so refuse to guess.
+            logger.warning(
+                "Group %s has %s destinations (%s); set WAREHOUSE_TYPE explicitly to "
+                "choose a dialect.", group_id, len(matches),
+                ", ".join(sorted(str(d.get("id")) for d in matches)),
+            )
+            return None
+        dest_id = matches[0].get("id")
+        return self.get_destination(dest_id) if dest_id else None
+
 

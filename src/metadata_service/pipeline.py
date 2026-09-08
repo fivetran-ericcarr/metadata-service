@@ -141,7 +141,7 @@ def build_metadata(
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
     if enrich_warehouse and not fixtures_dir and include_fivetran:
-        enrichment = _enrich_primary_keys(settings, fivetran_norm)
+        enrichment = _enrich_from_warehouse(settings, fivetran_norm)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
     activations_norm = ActivationsNormalizer().normalize(activations_raw)
     doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm, activations_norm)
@@ -286,21 +286,36 @@ def _extract_fivetran(
         )
 
 
-def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> str:
-    """Override PK flags from the Platform Connector's fivetran_metadata
-    (best-effort). Returns the enrichment outcome for build_scope:
-    ``unavailable`` (no reader configured), ``ran`` (applied), or ``failed``.
+def _enrich_from_warehouse(settings: Settings, fivetran_norm: dict) -> str:
+    """Enrich normalized columns from the destination warehouse (best-effort).
+
+    Two independent reads: PK flags from the Platform Connector's
+    ``fivetran_metadata``, and data_type/max_length/nullable from the
+    destination's INFORMATION_SCHEMA. Returns the outcome for build_scope:
+    ``unavailable`` (no reader configured/supported), ``ran`` (applied), or
+    ``failed``.
 
     The reader construction is inside the guard too: a misconfigured reader
     (e.g. a bad WAREHOUSE_DATABASE) must not abort the whole build — enrichment
     is best-effort. The outcome is recorded in build_scope so a build where
     enrichment silently didn't run isn't drift-compared against one where it did
-    (which would mass-fire primary_key_changed in both directions)."""
-    from .warehouse import apply_primary_keys, get_warehouse_reader
+    (which would mass-fire primary_key_changed in both directions).
+
+    The column read is nested in its own guard: a warehouse that grants the
+    read-only role SELECT on fivetran_metadata but not on INFORMATION_SCHEMA
+    should still keep its authoritative PKs rather than losing both.
+    """
+    from .warehouse import (
+        apply_column_schema,
+        apply_primary_keys,
+        destination_from_dict,
+        get_warehouse_reader,
+    )
 
     reader = None
     try:
-        reader = get_warehouse_reader(settings)
+        destination = destination_from_dict(fivetran_norm.get("destination"))
+        reader = get_warehouse_reader(settings, destination)
         if reader is None:
             return "unavailable"
         connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", [])
@@ -308,6 +323,16 @@ def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> str:
         pk_map = reader.read_primary_keys(connection_ids or None)
         updated = apply_primary_keys(fivetran_norm, pk_map)
         logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
+
+        try:
+            schemas = _destination_schemas(fivetran_norm)
+            column_map = reader.read_column_schema(schemas or None)
+            enriched = apply_column_schema(fivetran_norm, column_map)
+            logger.info("Enriched %s columns with data_type/max_length/nullable from "
+                        "INFORMATION_SCHEMA", enriched)
+        except Exception as exc:
+            logger.error("Column-schema enrichment FAILED (PK enrichment still applied): %s", exc)
+
         return "ran"
     except Exception as exc:  # never fail the build on enrichment
         # The reader was EXPLICITLY configured, so a silent skip means PKs quietly
@@ -320,6 +345,16 @@ def _enrich_primary_keys(settings: Settings, fivetran_norm: dict) -> str:
                 reader.close()
             except Exception:  # pragma: no cover
                 pass
+
+
+def _destination_schemas(fivetran_norm: dict) -> list[str]:
+    """Distinct destination schemas in the snapshot, to bound the column read."""
+    schemas = {
+        (table.get("destination_schema") or "")
+        for conn in fivetran_norm.get("connections", []) or []
+        for table in conn.get("tables", []) or []
+    }
+    return sorted(s for s in schemas if s)
 
 
 def _extract_activations(settings: Settings) -> dict:
@@ -336,7 +371,8 @@ def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: i
 
 
 def _empty_fivetran() -> dict:
-    return {"extracted_at": None, "source": "fivetran", "connections": [], "errors": []}
+    return {"extracted_at": None, "source": "fivetran", "destination": None,
+            "connections": [], "errors": []}
 
 
 def _empty_dbt() -> dict:
@@ -376,6 +412,9 @@ def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict, dict]:
     fivetran_raw = {
         "extracted_at": connections_fix.get("extracted_at"),
         "source": "fivetran",
+        # Optional: lets an offline build exercise destination detection and the
+        # `database` field without reaching the API.
+        "destination": _load_json(fixtures / "fivetran_destination.json") or None,
         "connections": fivetran_connections,
         "errors": [],
     }

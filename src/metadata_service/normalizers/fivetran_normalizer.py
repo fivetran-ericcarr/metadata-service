@@ -8,19 +8,25 @@ from __future__ import annotations
 
 import logging
 
+from ..warehouse.destination import describe_destination
+
 logger = logging.getLogger(__name__)
 
 
 class FivetranNormalizer:
     def normalize(self, raw: dict) -> dict:
-        """Return ``{"extracted_at": ..., "connections": [...]}``."""
+        """Return ``{"extracted_at": ..., "destination": {...}|None, "connections": [...]}``."""
         connections = []
         for item in (raw or {}).get("connections", []) or []:
             normalized = self._normalize_connection(item)
             if normalized:
                 connections.append(normalized)
+        # Non-secret destination coordinates only: describe_destination drops the
+        # raw config, so no masked credential field can reach a snapshot.
+        destination = describe_destination((raw or {}).get("destination"))
         return {
             "extracted_at": (raw or {}).get("extracted_at"),
+            "destination": destination.as_dict() if destination else None,
             "connections": connections,
             "errors": list((raw or {}).get("errors") or []),
         }

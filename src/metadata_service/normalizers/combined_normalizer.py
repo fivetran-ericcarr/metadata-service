@@ -63,6 +63,13 @@ class CombinedNormalizer:
         all_recommendations: list[dict] = []
         build_errors: list[dict] = []
 
+        # The destination database from the Fivetran destinations endpoint. It
+        # populates the object's `database` field but deliberately NOT object_id,
+        # which stays `warehouse://unknown/...` so a stable public identifier is
+        # not silently rewritten (see build_object_id).
+        destination = fivetran_normalized.get("destination") or {}
+        destination_database = destination.get("database")
+
         for conn in fivetran_normalized.get("connections", []) or []:
             for table in conn.get("tables", []) or []:
                 # One malformed table must degrade into errors[], not kill the
@@ -71,6 +78,7 @@ class CombinedNormalizer:
                     obj = self._build_object(
                         conn, table, source_index, model_index,
                         sources_by_uid, models_by_uid, lineage, exposures, metrics,
+                        database=destination_database,
                     )
                     recs = recommend_for_object(obj, stale_threshold_hours=self._stale_hours)
                     self._apply_recommendations(obj, recs)
@@ -112,6 +120,9 @@ class CombinedNormalizer:
             "sources": {
                 "fivetran": {
                     "extracted_at": fivetran_normalized.get("extracted_at"),
+                    # Non-secret destination coordinates only; makes dialect
+                    # detection observable without exposing any config field.
+                    "destination": fivetran_normalized.get("destination"),
                     "connections": fivetran_normalized.get("connections") or [],
                 },
                 "dbt": {
@@ -231,7 +242,8 @@ class CombinedNormalizer:
 
     # -- per-object -------------------------------------------------------
     def _build_object(self, conn, table, source_index, model_index,
-                      sources_by_uid, models_by_uid, lineage, exposures=None, metrics=None) -> dict:
+                      sources_by_uid, models_by_uid, lineage, exposures=None, metrics=None,
+                      database=None) -> dict:
         dest_schema = table.get("destination_schema")
         dest_table = table.get("destination_table")
         object_id = build_object_id(None, dest_schema, dest_table)
@@ -273,7 +285,7 @@ class CombinedNormalizer:
 
         return {
             "object_id": object_id,
-            "database": None,
+            "database": database,
             "schema": dest_schema,
             "name": dest_table,
             "object_type": "table",
@@ -507,18 +519,28 @@ class CombinedNormalizer:
         for col in table.get("columns") or []:
             name = col.get("destination_name")
             lname = (name or "").lower()
+            is_pk = col.get("is_primary_key", False)
+            col_tests = tests_by_col.get(lname, [])
+            unique, unique_source = _derive_unique(is_pk, col_tests)
+            data_type, data_type_source = _resolve_data_type(col, dbt_type.get(lname))
             columns.append(
                 {
                     "name": name,
                     "source_name": col.get("source_name"),
-                    "data_type": dbt_type.get(lname),
+                    "data_type": data_type,
+                    "data_type_source": data_type_source,
+                    "max_length": col.get("max_length"),
+                    "nullable": col.get("nullable"),
+                    "schema_source": col.get("schema_source"),
+                    "unique": unique,
+                    "unique_source": unique_source,
                     "enabled": col.get("enabled", True),
-                    "is_primary_key": col.get("is_primary_key", False),
+                    "is_primary_key": is_pk,
                     "key_constraint": col.get("key_constraint"),
                     "key_source": col.get("key_source"),
                     "hashed": col.get("hashed", False),
                     "dbt_description": dbt_desc.get(lname),
-                    "dbt_tests": tests_by_col.get(lname, []),
+                    "dbt_tests": col_tests,
                     "recommended_tests": [],
                 }
             )
@@ -603,6 +625,54 @@ class CombinedNormalizer:
             "recommended_tests_count": rec_tests,
             "risk_level": risk,
         }
+
+
+def _resolve_data_type(column: dict, dbt_catalog_type: str | None) -> tuple[str | None, str | None]:
+    """Pick a column's data type from the two sources that can supply one.
+
+    The warehouse's own ``INFORMATION_SCHEMA`` wins: it describes the physical
+    column as it exists right now, whereas the dbt catalog is a snapshot from the
+    last ``docs generate`` and only covers relations dbt knows about. The catalog
+    fills in whenever the warehouse reader did not run or did not match the
+    column, which keeps ``data_type`` populated for Fivetran-only deployments.
+
+    ``data_type_source`` is separate from ``schema_source`` because the two answer
+    different questions: this one says where ``data_type`` came from, while
+    ``schema_source`` says whether a warehouse read matched the column at all —
+    and only a warehouse read can supply ``max_length``/``nullable``.
+    """
+    warehouse_type = column.get("data_type")
+    if warehouse_type:
+        return warehouse_type, column.get("schema_source") or "information_schema"
+    if dbt_catalog_type:
+        return dbt_catalog_type, "dbt_catalog"
+    return None, None
+
+
+def _derive_unique(is_primary_key: bool, column_tests: list[str]) -> tuple[bool, str | None]:
+    """Derive column uniqueness and say where the signal came from.
+
+    There is no authoritative source for this. Fivetran-replicated tables carry
+    no enforced uniqueness constraints, and Snowflake does not enforce UNIQUE at
+    all, so ``unique`` is a DERIVED signal — never a warehouse fact. ``unique_source``
+    exists so no consumer can mistake it for one:
+
+    * ``"primary_key"`` — the column is a Fivetran primary key (strongest signal);
+    * ``"dbt_test"`` — a dbt ``unique`` test is attached to this column, i.e.
+      uniqueness is asserted and verified on every run;
+    * ``None`` — no signal, and ``unique`` is False.
+
+    ``unique_combination_of_columns`` is deliberately NOT counted: it asserts that
+    a COMBINATION is unique, which says nothing about any member column on its
+    own. Attributing it per-column would assert something false.
+    """
+    if is_primary_key:
+        return True, "primary_key"
+    for test in column_tests or []:
+        token = (test or "").lower()
+        if "unique" in token and "combination" not in token:
+            return True, "dbt_test"
+    return False, None
 
 
 def _index_dbt(objects: list[dict], *, id_field: str, name_field: str) -> dict:

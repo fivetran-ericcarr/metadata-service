@@ -37,6 +37,7 @@ DQ application should consume the **normalized snapshot** (section 2), not these
 {
   "extracted_at": "2026-06-25T12:40:00Z",
   "source": "fivetran",
+  "destination": { "...": "raw GET /destinations/{id} body, or null" },
   "connections": [
     {
       "detail": { "...": "raw GET /connections/{id} body" },
@@ -110,13 +111,23 @@ The primary artifact. Top-level shape:
 | `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
-| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment}`. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
+| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment}` (`pk_enrichment` reports the outcome of the whole warehouse-reader step — PKs *and* column attributes — as `not_requested`/`unavailable`/`ran`/`failed`). Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
 
 ### 2.1 `sources.fivetran`
 
 ```json
 {
   "extracted_at": "2026-06-25T12:40:00Z",
+  "destination": {
+    "destination_id": "group_123",
+    "group_id": "group_123",
+    "service": "snowflake",
+    "warehouse_type": "snowflake",
+    "database": "ANALYTICS",
+    "host": "ab12345-demo.snowflakecomputing.com",
+    "region": "GCP_US_EAST4",
+    "setup_status": "connected"
+  },
   "connections": [
     {
       "connection_id": "conn_sf_001",
@@ -147,6 +158,13 @@ The primary artifact. Top-level shape:
 
 Both **source** and **destination** names are preserved for every table and
 column.
+
+`destination` is the resolved Fivetran destination for `FIVETRAN_GROUP_ID`, and is
+`null` when none could be resolved (no group id, a group with several
+destinations, or a fixtures build). It carries **only non-secret coordinates** —
+the raw `config` is dropped, and any field Fivetran masked as `"******"` is
+treated as absent. `warehouse_type` is the reader dialect derived from `service`;
+it is what `WAREHOUSE_TYPE` overrides.
 
 ### 2.2 `sources.dbt`
 
@@ -190,7 +208,7 @@ downstream models.
 ```json
 {
   "object_id": "warehouse://unknown/salesforce/account",
-  "database": null,
+  "database": "ANALYTICS",
   "schema": "salesforce",
   "name": "account",
   "object_type": "table",
@@ -217,6 +235,12 @@ downstream models.
       "name": "id",
       "source_name": "Id",
       "data_type": "NUMBER",
+      "data_type_source": "information_schema",
+      "max_length": null,
+      "nullable": false,
+      "schema_source": "information_schema",
+      "unique": true,
+      "unique_source": "primary_key",
       "enabled": true,
       "is_primary_key": true,
       "key_constraint": "primary_key",
@@ -242,13 +266,20 @@ downstream models.
 
 | Field | Meaning |
 |---|---|
-| `object_id` | Stable, warehouse-agnostic id: `warehouse://<db>/<schema>/<table>` (lower-cased; `db` is `unknown` because Fivetran does not expose the destination database) |
+| `object_id` | Stable, warehouse-agnostic id: `warehouse://<db>/<schema>/<table>` (lower-cased). `db` is always the literal `unknown`: the destination database IS available (see `database`), but `object_id` is a public identifier that recommendations, waivers and drift key on, so it is deliberately frozen rather than rewritten under existing consumers. |
+| `database` | Destination database/catalog/project, from the Fivetran destinations endpoint. `null` when no destination could be resolved (no `FIVETRAN_GROUP_ID`, a group with several destinations, or a fixtures build). Does **not** feed `object_id`. |
 | `origin` | Fivetran provenance for the table |
 | `dbt.source_unique_id` | Matched dbt source (or `null`) |
 | `dbt.model_unique_ids` | Downstream dbt models reached via lineage |
 | `dbt.tests` | Tests attached to the matched source + models |
 | `dbt.freshness` | Freshness result/config for the matched source (or `null`) |
-| `columns[].data_type` | Warehouse data type, from the dbt catalog (or a documented `data_type`); `null` when the object has no matched dbt source/model or the column is absent from the catalog |
+| `columns[].data_type` | Warehouse data type. Preferred from `INFORMATION_SCHEMA.COLUMNS`, falling back to the dbt catalog (or a documented `data_type`); `null` when neither source covers the column |
+| `columns[].data_type_source` | `information_schema`, `dbt_catalog`, or `null` — which source supplied `data_type` |
+| `columns[].max_length` | `CHARACTER_MAXIMUM_LENGTH`; `null` for every non-character type, and `null` when the warehouse reader did not run. The dbt catalog cannot supply this |
+| `columns[].nullable` | `IS_NULLABLE` as a bool; `null` when the reader did not run or the warehouse reported a value that is neither `YES` nor `NO`. The dbt catalog cannot supply this |
+| `columns[].schema_source` | `information_schema` when a warehouse read matched this column (and so `max_length`/`nullable` are authoritative), else `null`. Distinct from `data_type_source`, which describes only `data_type` |
+| `columns[].unique` | **Derived, not a warehouse constraint** — see below |
+| `columns[].unique_source` | `primary_key`, `dbt_test`, or `null` — where the `unique` signal came from |
 | `columns[].is_primary_key` | True only for an unambiguous Fivetran primary key (see below) |
 | `columns[].key_constraint` | `primary_key`, `primary_or_foreign_key`, or `null` |
 | `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, else `null` |
@@ -272,12 +303,68 @@ exclusion via `enabled_patch_settings` (`allowed: false`, `reason_code:
 
 An explicit `is_primary_key` field, when a connector provides one, always wins.
 
-**Authoritative PKs (optional).** When the Snowflake warehouse reader is configured
-(`WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`), the build overrides PK flags from the
-Fivetran Platform Connector's `fivetran_metadata` schema (`SOURCE_COLUMN.is_primary_key`
-joined through `COLUMN_LINEAGE` to the destination column). This recovers PKs the
-config API omits (e.g. GitHub) and reveals **composite** keys. Such columns are tagged
-`key_source: "fivetran_platform"`; `key_source` is `null` otherwise.
+**Authoritative PKs (optional).** When the warehouse reader is configured
+(`WAREHOUSE_*` credentials; the dialect is auto-detected), the build overrides PK
+flags from the Fivetran Platform Connector's `fivetran_metadata` schema
+(`SOURCE_COLUMN.is_primary_key` joined through `COLUMN_LINEAGE` to the destination
+column). This recovers PKs the config API omits (e.g. GitHub) and reveals
+**composite** keys. Such columns are tagged `key_source: "fivetran_platform"`;
+`key_source` is `null` otherwise.
+
+**Column data types, lengths and nullability.** `data_type` has two possible
+sources and `data_type_source` always says which one was used:
+
+- **`information_schema`** — the destination's own `INFORMATION_SCHEMA.COLUMNS`,
+  read by the warehouse reader. Preferred, because it describes the physical
+  column as it exists right now.
+- **`dbt_catalog`** — the dbt catalog's `sources` node (or a `data_type`
+  documented in the manifest), used whenever the reader did not run or did not
+  match the column. A snapshot from the last `docs generate`, and only covers
+  relations dbt knows about — but it keeps `data_type` populated on a
+  Fivetran-only deployment with no warehouse credentials.
+
+`max_length` and `nullable` have **only** the first source: neither the Fivetran
+schema API nor the dbt catalog carries `CHARACTER_MAXIMUM_LENGTH` or
+`IS_NULLABLE` (catalog columns hold only `type`, `index` and `comment`). That is
+what `schema_source` reports, separately from `data_type_source`: it is
+`information_schema` exactly when a warehouse read matched the column, and so
+exactly when `max_length`/`nullable` can be trusted.
+
+The warehouse read uses the same reader and credentials as the PK read, bounded to
+the destination schemas in the snapshot. The three ANSI attribute names are
+identical on Snowflake, Redshift, Postgres and SQL Server, so one query serves all
+four. **Only Snowflake has a reader today** — the others need a driver extra
+first. BigQuery and Databricks (Unity Catalog) expose the information differently
+and need their own statements. Fivetran's Managed Data Lake destinations have no
+SQL information schema at all; their column metadata lives in the table-format
+catalog (Polaris/Glue/Unity), and the reader declines them explicitly rather than
+reporting a gap it could fill.
+
+A build where neither source covered a column still emits every key as an explicit
+`null`, so an absent value is never confused with a missing field.
+
+**`unique` is derived, not observed.** Fivetran-replicated tables carry no
+enforced uniqueness constraints, and Snowflake does not enforce `UNIQUE` even when
+declared — so there is no authoritative source for this attribute anywhere in the
+stack. `unique` is a derived signal and `unique_source` always says which one:
+
+- `primary_key` — the column is a Fivetran primary key (strongest available signal);
+- `dbt_test` — a dbt `unique` test is attached to the column, i.e. uniqueness is
+  asserted and re-verified on every run;
+- `null` — no signal at all, and `unique` is `false`.
+
+`dbt_utils.unique_combination_of_columns` is deliberately **not** counted: it
+asserts that a *combination* is unique, which implies nothing about any member
+column on its own. Treat `unique: true` as evidence, never as a constraint.
+
+**Destination detection.** `GET /v1/destinations/{id}` supplies the destination's
+`service` (which selects the reader dialect) and its `database`/`catalog`/
+`project_id`. `WAREHOUSE_TYPE` and `WAREHOUSE_DATABASE` remain explicit overrides
+and win when set. Credentials are **not** available this way — Fivetran masks
+every password-format config field as the literal `"******"` — so the operator
+still supplies a read-only credential via `WAREHOUSE_USER` plus
+`WAREHOUSE_PASSWORD` or `WAREHOUSE_PRIVATE_KEY_PATH`. Only non-secret coordinates
+are kept, and the raw `config` never reaches a snapshot.
 
 ### 2.4 `dq_recommendations[]`
 

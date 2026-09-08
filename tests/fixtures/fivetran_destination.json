@@ -1,0 +1,20 @@
+{
+  "id": "demo_group",
+  "group_id": "demo_group",
+  "service": "snowflake",
+  "region": "GCP_US_EAST4",
+  "time_zone_offset": "-8",
+  "setup_status": "connected",
+  "daylight_saving_time_enabled": false,
+  "networking_method": "Directly",
+  "config": {
+    "host": "AB12345-DEMO_ACCOUNT.snowflakecomputing.com",
+    "database": "ANALYTICS",
+    "user": "FIVETRAN_USER",
+    "role": "FIVETRAN_ROLE",
+    "port": "443",
+    "auth": "KEY_PAIR",
+    "private_key": "******",
+    "passphrase": "******"
+  }
+}
