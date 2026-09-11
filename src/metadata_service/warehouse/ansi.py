@@ -14,6 +14,9 @@ and parameter styles differ).
 from __future__ import annotations
 
 import logging
+import re
+
+from ..exceptions import MetadataServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,24 @@ _SELECT = (
 #: Information schemas that only ever describe the platform itself. Excluded so a
 #: full-database read doesn't drag in thousands of irrelevant system columns.
 _SYSTEM_SCHEMAS = ("INFORMATION_SCHEMA", "PG_CATALOG", "SYS", "PERFORMANCE_SCHEMA")
+
+_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def validate_identifier(value: str | None, setting_name: str) -> str:
+    """Validate a value that a reader will interpolate directly into SQL as an
+    identifier (database/schema name) rather than bind as a parameter.
+
+    Every reader needs this: the information-schema and ``fivetran_metadata``
+    fully-qualified names can't be bound as bind parameters (drivers only bind
+    values, not identifiers), so whatever produced them — a ``WAREHOUSE_*``
+    setting or an auto-detected destination database — must be checked first.
+    Raises :class:`MetadataServiceError` naming ``setting_name`` if it isn't a
+    simple identifier.
+    """
+    if not value or not _IDENT.match(value):
+        raise MetadataServiceError(f"{setting_name} must be a simple identifier, got {value!r}.")
+    return value
 
 
 def build_column_schema_sql(

@@ -109,6 +109,11 @@ def get_warehouse_reader(
 
         return SnowflakeMetadataReader(settings, destination=destination)
 
+    if wtype == "postgres":
+        from .postgres_reader import PostgresMetadataReader
+
+        return PostgresMetadataReader(settings, destination=destination)
+
     if wtype in ANSI_INFORMATION_SCHEMA_TYPES:
         logger.warning(
             "Destination type %r uses the ANSI information schema but has no reader "

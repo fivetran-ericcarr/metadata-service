@@ -17,16 +17,15 @@ Requires the optional extra: ``pip install 'metadata-service[warehouse-snowflake
 from __future__ import annotations
 
 import logging
-import re
 
-from .ansi import build_column_schema_sql, rows_to_column_map
+from .ansi import build_column_schema_sql, rows_to_column_map, validate_identifier
 from .destination import DestinationInfo
+from .fivetran_metadata import build_primary_key_sql, rows_to_pk_map
 from ..config import Settings
 from ..exceptions import MetadataServiceError
 
 logger = logging.getLogger(__name__)
 
-_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 _SNOWFLAKE_HOST_SUFFIX = ".snowflakecomputing.com"
 
 
@@ -53,10 +52,8 @@ class SnowflakeMetadataReader:
         self._account = settings.warehouse_account or _account_from_host(
             destination.host if destination else None
         )
-        for name, val in (("WAREHOUSE_DATABASE", self._database),
-                          ("WAREHOUSE_METADATA_SCHEMA", settings.warehouse_metadata_schema)):
-            if not val or not _IDENT.match(val):
-                raise MetadataServiceError(f"{name} must be a simple identifier, got {val!r}.")
+        validate_identifier(self._database, "WAREHOUSE_DATABASE")
+        validate_identifier(settings.warehouse_metadata_schema, "WAREHOUSE_METADATA_SCHEMA")
         self._fqn = f"{self._database}.{settings.warehouse_metadata_schema}"
         self._information_schema_fqn = f"{self._database}.INFORMATION_SCHEMA"
 
@@ -107,29 +104,11 @@ class SnowflakeMetadataReader:
 
     # -- queries ----------------------------------------------------------
     def read_primary_keys(self, connection_ids: list[str] | None = None) -> dict[tuple[str, str], list[str]]:
-        sql = f"""
-            select ds.name as dest_schema, dt.name as dest_table, dc.name as dest_column
-            from {self._fqn}.SOURCE_COLUMN sc
-            join {self._fqn}.COLUMN_LINEAGE cl on cl.source_column_id = sc.id
-            join {self._fqn}.DESTINATION_COLUMN dc on dc.id = cl.destination_column_id
-            join {self._fqn}.DESTINATION_TABLE dt on dt.id = dc.table_id
-            join {self._fqn}.DESTINATION_SCHEMA ds on ds.id = dt.schema_id
-            where sc.is_primary_key = true
-        """
-        params: list = []
-        if connection_ids:
-            placeholders = ", ".join(["%s"] * len(connection_ids))
-            sql += f" and sc.connection_id in ({placeholders})"
-            params = list(connection_ids)
-
+        sql, params = build_primary_key_sql(self._fqn, connection_ids)
         cur = self._connect().cursor()
         try:
             cur.execute(sql, params)
-            pk_map: dict[tuple[str, str], list[str]] = {}
-            for schema, table, column in cur.fetchall():
-                if not (schema and table and column):
-                    continue
-                pk_map.setdefault((schema.lower(), table.lower()), []).append(column)
+            pk_map = rows_to_pk_map(cur.fetchall())
             logger.info("Read %s PK columns across %s tables from %s",
                         sum(len(v) for v in pk_map.values()), len(pk_map), self._fqn)
             return pk_map
