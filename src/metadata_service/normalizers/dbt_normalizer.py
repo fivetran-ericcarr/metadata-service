@@ -26,13 +26,14 @@ class DbtNormalizer:
         run_status = self._index_run_results(run_results)
         freshness = self._index_freshness(sources_artifact)
         catalog_nodes = (catalog.get("nodes") or {}) if isinstance(catalog, dict) else {}
+        catalog_sources = (catalog.get("sources") or {}) if isinstance(catalog, dict) else {}
 
         manifest_nodes = manifest.get("nodes") or {}
         manifest_sources = manifest.get("sources") or {}
         manifest_exposures = manifest.get("exposures") or {}
 
         models = self._build_models(manifest_nodes, catalog_nodes, run_status, warnings)
-        sources = self._build_sources(manifest_sources, freshness, warnings)
+        sources = self._build_sources(manifest_sources, catalog_sources, freshness, warnings)
         tests = self._build_tests(manifest_nodes, run_status, warnings)
 
         self._attach_tests(tests, models, sources)
@@ -205,7 +206,8 @@ class DbtNormalizer:
             "owner": meta.get("owner"),
         }
 
-    def _build_sources(self, sources: dict, freshness: dict, warnings: list) -> list[dict]:
+    def _build_sources(self, sources: dict, catalog_sources: dict, freshness: dict,
+                       warnings: list) -> list[dict]:
         out = []
         for uid, node in sources.items():
             if (node or {}).get("resource_type") != "source":
@@ -221,7 +223,10 @@ class DbtNormalizer:
                         "identifier": node.get("identifier"),
                         "relation_name": node.get("relation_name"),
                         "description": node.get("description"),
-                        "columns": _build_columns(node.get("columns") or {}, {}),
+                        "columns": _build_columns(
+                            node.get("columns") or {},
+                            ((catalog_sources.get(uid) or {}).get("columns")) or {},
+                        ),
                         "freshness": node.get("freshness"),
                         "freshness_result": freshness.get(uid),
                         "tests": [],
@@ -315,10 +320,21 @@ class DbtNormalizer:
 
 # -- module helpers -------------------------------------------------------
 def _build_columns(manifest_columns: dict, catalog_columns: dict) -> list[dict]:
+    """Union documented columns (manifest) with physical ones (catalog).
+
+    Sources and models are commonly documented for only a subset of their
+    columns — raw Fivetran-loaded sources often for none at all — while
+    ``catalog.json`` carries every physical column and its warehouse data type.
+    Matching is case-insensitive because dbt yml is conventionally lower-case
+    while warehouses such as Snowflake report upper-case identifiers.
+    """
+    catalog_by_lower = {str(n).lower(): (c or {}) for n, c in (catalog_columns or {}).items()}
     out = []
+    seen: set[str] = set()
     for name, col in (manifest_columns or {}).items():
         col = col or {}
-        catalog_col = catalog_columns.get(name) or {}
+        catalog_col = catalog_by_lower.get(str(name).lower(), {})
+        seen.add(str(name).lower())
         out.append(
             {
                 "name": name,
@@ -326,6 +342,19 @@ def _build_columns(manifest_columns: dict, catalog_columns: dict) -> list[dict]:
                 "data_type": col.get("data_type") or catalog_col.get("type"),
                 "tags": col.get("tags") or [],
                 "meta": col.get("meta") or {},
+            }
+        )
+    for name, col in (catalog_columns or {}).items():
+        if str(name).lower() in seen:
+            continue
+        col = col or {}
+        out.append(
+            {
+                "name": name,
+                "description": col.get("comment"),
+                "data_type": col.get("type"),
+                "tags": [],
+                "meta": {},
             }
         )
     return out

@@ -32,6 +32,13 @@ def test_warehouse_object_columns_and_object_id(built_doc):
     assert cols["id"]["dbt_description"] == "Account id from Salesforce"
     assert cols["email"]["hashed"] is True
 
+    # data_type is resolved from the dbt catalog and keyed case-insensitively
+    # against the Fivetran destination column name.
+    assert cols["id"]["data_type"] == "NUMBER"
+    assert cols["email"]["data_type"] == "VARCHAR"
+    # absent from both catalog and manifest -> explicit null, not a missing key
+    assert cols["name"]["data_type"] is None
+
 
 def test_dq_summary(built_doc):
     account = object_by_table(built_doc, "salesforce", "account")

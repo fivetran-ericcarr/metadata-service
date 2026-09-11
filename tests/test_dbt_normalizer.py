@@ -31,6 +31,41 @@ def test_sources_and_freshness(dbt_normalized):
     assert src["freshness_result"]["max_loaded_at"] == "2026-06-25T12:15:00Z"
 
 
+def test_source_columns_get_data_type_from_catalog(dbt_normalized):
+    """Source columns carry warehouse data types even though the manifest
+    declares none — the catalog's ``sources`` node is the only place they live."""
+    src = _by_uid(dbt_normalized["sources"])["source.demo.salesforce.account"]
+    cols = {c["name"]: c for c in src["columns"]}
+    assert cols["id"]["data_type"] == "NUMBER"
+    assert cols["email"]["data_type"] == "VARCHAR"
+    assert cols["id"]["description"] == "Account id from Salesforce"
+
+
+def test_undocumented_catalog_columns_are_included():
+    """A column present only in the catalog still surfaces, so raw sources with
+    no per-column docs (the norm for Fivetran-loaded tables) are not empty."""
+    from metadata_service.normalizers.dbt_normalizer import DbtNormalizer
+
+    out = DbtNormalizer().normalize({
+        "artifacts": {
+            "manifest": {"sources": {"source.d.s.t": {
+                "resource_type": "source", "name": "t", "source_name": "s",
+                "columns": {"documented": {"description": "d"}},
+            }}},
+            "catalog": {"sources": {"source.d.s.t": {"columns": {
+                "DOCUMENTED": {"type": "NUMBER"},
+                "UNDOCUMENTED": {"type": "VARCHAR", "comment": "from warehouse"},
+            }}}},
+        }
+    })
+    cols = {c["name"]: c for c in out["sources"][0]["columns"]}
+    # case-insensitive merge: no duplicate entry for the documented column
+    assert set(cols) == {"documented", "UNDOCUMENTED"}
+    assert cols["documented"]["data_type"] == "NUMBER"
+    assert cols["UNDOCUMENTED"]["data_type"] == "VARCHAR"
+    assert cols["UNDOCUMENTED"]["description"] == "from warehouse"
+
+
 def test_tests_extracted_with_type_and_status(dbt_normalized):
     tests = _by_uid(dbt_normalized["tests"])
     nn = tests["test.demo.not_null_stg_salesforce__account_id"]

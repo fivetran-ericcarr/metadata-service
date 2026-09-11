@@ -216,6 +216,7 @@ downstream models.
     {
       "name": "id",
       "source_name": "Id",
+      "data_type": "NUMBER",
       "enabled": true,
       "is_primary_key": true,
       "key_constraint": "primary_key",
@@ -247,6 +248,7 @@ downstream models.
 | `dbt.model_unique_ids` | Downstream dbt models reached via lineage |
 | `dbt.tests` | Tests attached to the matched source + models |
 | `dbt.freshness` | Freshness result/config for the matched source (or `null`) |
+| `columns[].data_type` | Warehouse data type, from the dbt catalog (or a documented `data_type`); `null` when the object has no matched dbt source/model or the column is absent from the catalog |
 | `columns[].is_primary_key` | True only for an unambiguous Fivetran primary key (see below) |
 | `columns[].key_constraint` | `primary_key`, `primary_or_foreign_key`, or `null` |
 | `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, else `null` |
