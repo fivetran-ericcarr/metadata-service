@@ -83,9 +83,13 @@ class Settings(BaseSettings):
         default=24, alias="STALE_SYNC_THRESHOLD_HOURS"
     )
 
-    # --- Warehouse metadata reader (Fivetran Platform Connector) ----------
-    # Reads authoritative PKs/lineage from the `fivetran_metadata` schema in the
-    # destination. Enabled when WAREHOUSE_TYPE=snowflake and account/database set.
+    # --- Warehouse metadata reader ----------------------------------------
+    # Reads authoritative PKs/lineage from the Fivetran Platform Connector's
+    # `fivetran_metadata` schema, and column data_type/max_length/nullable from
+    # the destination's INFORMATION_SCHEMA. The dialect and database are
+    # auto-detected from the Fivetran destination (WAREHOUSE_TYPE and
+    # WAREHOUSE_DATABASE override); the credential never is, so it must be set
+    # here — Fivetran masks every password-format destination config field.
     warehouse_account: str | None = Field(default=None, alias="WAREHOUSE_ACCOUNT")
     warehouse_user: str | None = Field(default=None, alias="WAREHOUSE_USER")
     warehouse_role: str | None = Field(default=None, alias="WAREHOUSE_ROLE")
@@ -114,12 +118,28 @@ class Settings(BaseSettings):
     def dbt_enabled(self) -> bool:
         return bool(self.dbt_account_id and self.dbt_service_token)
 
+    def warehouse_credentials_present(self) -> bool:
+        """True when an operator has supplied a warehouse login.
+
+        Deliberately does NOT check ``warehouse_type``/``warehouse_database``:
+        both can be auto-detected from the Fivetran destination, while the
+        credential never can — Fivetran masks every password-format config field.
+        """
+        return bool(
+            self.warehouse_user
+            and (self.warehouse_private_key_path or self.warehouse_password)
+        )
+
     def warehouse_reader_enabled(self) -> bool:
+        """True when a Snowflake reader is fully configured *without* relying on
+        destination auto-detection. Kept for callers that need the strict,
+        explicit-config answer; the reader factory itself uses
+        :meth:`warehouse_credentials_present` plus the resolved dialect."""
         return bool(
             (self.warehouse_type or "").lower() == "snowflake"
             and self.warehouse_account
             and self.warehouse_database
-            and (self.warehouse_private_key_path or self.warehouse_password)
+            and self.warehouse_credentials_present()
         )
 
     def require_fivetran(self) -> None:

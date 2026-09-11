@@ -48,6 +48,7 @@ class FivetranExtractor:
             group_id or "<all>", connected_only, skip_paused,
         )
         connections_summary = self._client.list_connections(group_id=group_id)
+        destination = self._extract_destination(group_id, errors)
 
         out_connections: list[dict] = []
         skipped_count = 0
@@ -138,9 +139,28 @@ class FivetranExtractor:
         return {
             "extracted_at": utcnow_iso(),
             "source": "fivetran",
+            "destination": destination,
             "connections": out_connections,
             "errors": errors,
         }
+
+    def _extract_destination(self, group_id: str | None, errors: list[dict]) -> dict | None:
+        """Fetch the group's destination record (service + config), best-effort.
+
+        Supplies the warehouse dialect and database for the reader, and the
+        ``database`` on every warehouse object. A failure here degrades
+        enrichment but must never abort extraction, so it lands in ``errors``.
+        """
+        if not group_id:
+            logger.debug("No group_id given; skipping destination lookup.")
+            return None
+        try:
+            return self._client.find_destination_for_group(group_id)
+        except _FATAL_ERRORS:
+            raise
+        except FivetranError as exc:
+            errors.append(self._err(None, None, None, exc))
+            return None
 
     @staticmethod
     def _err(connection_id: str | None, schema: str | None, table: str | None, exc: Exception) -> dict:

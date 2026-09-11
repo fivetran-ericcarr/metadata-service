@@ -138,10 +138,10 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `API_HOST` / `API_PORT` | FastAPI bind (loopback by default — set `0.0.0.0` + an API key to serve remotely) | `127.0.0.1` / `8080` |
 | `METADATA_API_KEY` | When set, every REST route except `/health` requires it (`X-API-Key` or `Authorization: Bearer`) | — |
-| `WAREHOUSE_TYPE` | Prefix for object ids (`warehouse://...`) | `warehouse` |
-| `WAREHOUSE_DATABASE` | Warehouse DB name (also scopes Activations to syncs reading it) | — |
+| `WAREHOUSE_TYPE` | Override for the warehouse dialect; the placeholder `warehouse` means auto-detect from the Fivetran destination | `warehouse` |
+| `WAREHOUSE_DATABASE` | Override for the destination DB name (auto-detected otherwise; also scopes Activations to syncs reading it) | — |
 | `STALE_SYNC_THRESHOLD_HOURS` | Stale-sync risk threshold | `24` |
-| `WAREHOUSE_ACCOUNT` / `WAREHOUSE_USER` / `WAREHOUSE_ROLE` / `WAREHOUSE_NAME` | Snowflake connection for the Platform Connector PK reader | — |
+| `WAREHOUSE_ACCOUNT` / `WAREHOUSE_USER` / `WAREHOUSE_ROLE` / `WAREHOUSE_NAME` | Warehouse connection for the metadata reader (account is derived from the destination host when unset; the credential never is) | — |
 | `WAREHOUSE_METADATA_SCHEMA` | Schema holding `fivetran_metadata` | `fivetran_metadata` |
 | `WAREHOUSE_PRIVATE_KEY_PATH` / `WAREHOUSE_PRIVATE_KEY_PASSPHRASE` / `WAREHOUSE_PASSWORD` | Reader auth (key-pair, optionally passphrase-protected, or password) | — |
 | `ACTIVATIONS_API_TOKEN` | Fivetran Activations (Census) workspace token — enables the reverse-ETL readiness gate | — |
@@ -339,10 +339,20 @@ that Protocol and wiring it into `get_storage`.
 - **Recommendations**: add rules in `dq/recommendations.py` (PII, natural keys,
   boolean accepted-values, untested objects, etc. ship today).
 - **Authoritative PKs**: read the Fivetran Platform Connector's `fivetran_metadata`
-  schema from a Snowflake destination — set `WAREHOUSE_TYPE=snowflake` + `WAREHOUSE_*`
-  and install `pip install 'metadata-service[warehouse-snowflake]'`. The build then
-  overrides PK flags (incl. composite keys) from `SOURCE_COLUMN`/lineage; columns are
-  tagged `key_source: "fivetran_platform"`. Extend `warehouse/` for BigQuery/Databricks.
+  schema from the destination — set `WAREHOUSE_USER` + `WAREHOUSE_PASSWORD` (or
+  `WAREHOUSE_PRIVATE_KEY_PATH`) and install
+  `pip install 'metadata-service[warehouse-snowflake]'`. The dialect and database are
+  auto-detected from the Fivetran destination; `WAREHOUSE_TYPE`/`WAREHOUSE_DATABASE`
+  override. The build then overrides PK flags (incl. composite keys) from
+  `SOURCE_COLUMN`/lineage; columns are tagged `key_source: "fivetran_platform"`.
+- **Column data types / lengths / nullability**: the same reader fills
+  `max_length` and `nullable` from the destination's `INFORMATION_SCHEMA.COLUMNS`
+  — the only place `CHARACTER_MAXIMUM_LENGTH` and `IS_NULLABLE` exist — and
+  supplies an authoritative `data_type` that takes precedence over the dbt
+  catalog's (`data_type_source` says which was used). The ANSI query in
+  `warehouse/ansi.py` already covers Redshift/Postgres/SQL Server; each needs a
+  driver extra and a reader. BigQuery and Databricks need their own statements;
+  Managed Data Lake destinations have no SQL information schema at all.
 - **Storage**: implement `MetadataStorage` (e.g., GCS, Azure Blob).
 - **Drift**: add change types + severities in `dq/drift.py`.
 - **dbt Discovery API**: use `DbtClient.query_discovery` for richer lineage.

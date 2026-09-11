@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (destination detection + column-level attributes)
+- `FivetranClient.get_destination` / `list_destinations` /
+  `find_destination_for_group`. Fivetran documents destination `id` and `group_id`
+  as distinct and offers no `group_id` filter on the collection, so the lookup
+  tries the direct GET (ids equal group ids in practice) and falls back to
+  scanning the account list; a group with several destinations resolves to `None`
+  rather than guessing which database to read.
+- `warehouse/destination.py`: maps a destination's `service` onto the reader
+  dialect and pulls the non-secret coordinates (database/catalog/project, host)
+  out of each service's config shape. Only non-secret values are kept — Fivetran
+  masks every password-format field as `"******"`, and the raw `config` never
+  reaches a snapshot.
+- `WAREHOUSE_TYPE` and `WAREHOUSE_DATABASE` are now auto-detected from the
+  destination; both remain explicit overrides, and the placeholder default
+  `warehouse` is treated as "unset" so an unedited `.env` gets detection rather
+  than a permanently disabled reader. The Snowflake account is derived from the
+  destination host when `WAREHOUSE_ACCOUNT` is unset. Credentials are never
+  auto-filled.
+- `WarehouseMetadataReader.read_column_schema` + `warehouse/ansi.py`: the ANSI
+  `INFORMATION_SCHEMA.COLUMNS` query (`DATA_TYPE`, `CHARACTER_MAXIMUM_LENGTH`,
+  `IS_NULLABLE`), implemented for Snowflake and bounded to the destination schemas
+  in the snapshot. It is spelled identically on Redshift/Postgres/SQL Server, which
+  still need a driver extra and a reader; BigQuery and Databricks need their own
+  statements, and Managed Data Lake destinations are declined explicitly (no SQL
+  information schema exists to read).
+- `warehouse_objects[].columns[]` gains `max_length`, `nullable` and
+  `schema_source`, and `data_type` (added from the dbt catalog on the branch this
+  builds on) now prefers the information schema and falls back to the catalog. The
+  new `data_type_source` (`information_schema` | `dbt_catalog` | `null`) says which
+  one was used; `schema_source` stays separate because it answers a different
+  question — whether a warehouse read matched the column at all, and therefore
+  whether `max_length`/`nullable` can be trusted. Neither the Fivetran schema API
+  nor the dbt catalog can supply those two. The column read is guarded separately
+  from the PK read, so a role with SELECT on `fivetran_metadata` but not on
+  `INFORMATION_SCHEMA` keeps its authoritative PKs.
+- `warehouse_objects[].columns[]` gains `unique` + `unique_source`
+  (`primary_key` | `dbt_test` | `null`). **Derived, never a constraint**: Fivetran
+  tables carry no enforced uniqueness and Snowflake does not enforce `UNIQUE`.
+  `unique_combination_of_columns` is deliberately not counted — it says nothing
+  about any member column on its own.
+- `warehouse_objects[].database` is now populated from the destination.
+  `object_id` is deliberately unchanged and still carries the literal `unknown`
+  segment: it is a public identifier that recommendations, waivers and drift key
+  on, so promoting the real database into it is a separate, versioned decision.
+  The ARTIFACTS.md claim that Fivetran does not expose the destination database
+  was stale and has been corrected.
+
 ### Changed (audit cleanup — dedup, dead code, caching, docs)
 - Shared `dq/status.py` (`FAILING_STATUSES`/`is_failing_status`) replaces three
   copies of the failing-test status set (combined normalizer, recommendations,
