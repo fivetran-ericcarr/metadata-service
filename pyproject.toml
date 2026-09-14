@@ -29,6 +29,8 @@ mcp = ["mcp>=1.0"]
 # Read authoritative PKs/lineage from the Fivetran Platform Connector's
 # fivetran_metadata schema in a Snowflake destination.
 warehouse-snowflake = ["snowflake-connector-python>=3.0", "cryptography>=42"]
+# Same, for a Postgres (incl. Aurora/Azure Postgres) destination.
+warehouse-postgres = ["psycopg2-binary>=2.9"]
 # Column-level lineage by parsing compiled dbt SQL.
 lineage = ["sqlglot>=25"]
 dev = [

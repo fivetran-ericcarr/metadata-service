@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     warehouse_role: str | None = Field(default=None, alias="WAREHOUSE_ROLE")
     warehouse_name: str | None = Field(default=None, alias="WAREHOUSE_NAME")
     warehouse_database: str | None = Field(default=None, alias="WAREHOUSE_DATABASE")
+    # Host/port overrides for dialects that connect directly (Postgres, and
+    # Redshift/SQL Server to follow) rather than resolving a hostname from an
+    # account identifier the way Snowflake does. Auto-detected from the Fivetran
+    # destination's config when unset.
+    warehouse_host: str | None = Field(default=None, alias="WAREHOUSE_HOST")
+    warehouse_port: int | None = Field(default=None, alias="WAREHOUSE_PORT")
     warehouse_metadata_schema: str = Field(
         default="fivetran_metadata", alias="WAREHOUSE_METADATA_SCHEMA"
     )

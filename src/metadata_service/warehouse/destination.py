@@ -68,6 +68,7 @@ _DATABASE_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 _HOST_KEYS = ("host", "server_host_name", "server_hostname", "hostname")
+_PORT_KEYS = ("port",)
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class DestinationInfo:
     warehouse_type: str | None = None
     database: str | None = None
     host: str | None = None
+    port: int | None = None
     region: str | None = None
     setup_status: str | None = None
 
@@ -95,6 +97,7 @@ class DestinationInfo:
             "warehouse_type": self.warehouse_type,
             "database": self.database,
             "host": self.host,
+            "port": self.port,
             "region": self.region,
             "setup_status": self.setup_status,
         }
@@ -107,6 +110,18 @@ def _first_value(config: dict, keys) -> str | None:
         if isinstance(value, str) and value.strip() and value != REDACTED:
             return value.strip()
     return None
+
+
+def _first_port(config: dict, keys) -> int | None:
+    """Like :func:`_first_value` but coerced to int (Fivetran's config API
+    returns port numbers as strings, e.g. ``"5432"``)."""
+    value = _first_value(config, keys)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def describe_destination(payload: dict | None) -> DestinationInfo | None:
@@ -138,6 +153,7 @@ def describe_destination(payload: dict | None) -> DestinationInfo | None:
         warehouse_type=warehouse_type,
         database=_first_value(config, _DATABASE_KEYS.get(warehouse_type or "", ("database",))),
         host=_first_value(config, _HOST_KEYS),
+        port=_first_port(config, _PORT_KEYS),
         region=payload.get("region"),
         setup_status=payload.get("setup_status"),
     )

@@ -125,6 +125,7 @@ The primary artifact. Top-level shape:
     "warehouse_type": "snowflake",
     "database": "ANALYTICS",
     "host": "ab12345-demo.snowflakecomputing.com",
+    "port": null,
     "region": "GCP_US_EAST4",
     "setup_status": "connected"
   },
@@ -164,7 +165,10 @@ column.
 destinations, or a fixtures build). It carries **only non-secret coordinates** —
 the raw `config` is dropped, and any field Fivetran masked as `"******"` is
 treated as absent. `warehouse_type` is the reader dialect derived from `service`;
-it is what `WAREHOUSE_TYPE` overrides.
+it is what `WAREHOUSE_TYPE` overrides. `port` is `null` for dialects that connect
+via an account identifier rather than a host/port (Snowflake); it's populated for
+dialects that connect directly (Postgres, and Redshift/SQL Server to follow),
+overridden by `WAREHOUSE_PORT`.
 
 ### 2.2 `sources.dbt`
 
@@ -332,12 +336,15 @@ exactly when `max_length`/`nullable` can be trusted.
 
 The warehouse read uses the same reader and credentials as the PK read, bounded to
 the destination schemas in the snapshot. The three ANSI attribute names are
-identical on Snowflake, Redshift, Postgres and SQL Server, so one query serves all
-four. **Only Snowflake has a reader today** — the others need a driver extra
-first. BigQuery and Databricks (Unity Catalog) expose the information differently
-and need their own statements. Fivetran's Managed Data Lake destinations have no
-SQL information schema at all; their column metadata lives in the table-format
-catalog (Polaris/Glue/Unity), and the reader declines them explicitly rather than
+identical on Snowflake, Redshift, Postgres and SQL Server, so one query
+(`warehouse/ansi.py`) serves all four, and the `fivetran_metadata` PK join
+(`warehouse/fivetran_metadata.py`) is likewise shared. **Snowflake and Postgres
+have readers today**; Redshift and SQL Server still need a driver extra and a
+thin connection-handling reader (the query is already there). BigQuery and
+Databricks (Unity Catalog) expose the information differently and need their own
+statements. Fivetran's Managed Data Lake destinations have no SQL information
+schema at all; their column metadata lives in the table-format catalog
+(Polaris/Glue/Unity), and the reader declines them explicitly rather than
 reporting a gap it could fill.
 
 A build where neither source covered a column still emits every key as an explicit

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Postgres warehouse reader)
+- `PostgresMetadataReader` (`warehouse/postgres_reader.py`), enabled via the
+  new `warehouse-postgres` extra (`psycopg2-binary`). Reads the same two things
+  as the Snowflake reader — authoritative PKs from `fivetran_metadata` and
+  `data_type`/`max_length`/`nullable` from `INFORMATION_SCHEMA.COLUMNS` — using
+  shared query builders so the two readers can't drift apart:
+  `warehouse/fivetran_metadata.py` (the PK join, previously inlined in the
+  Snowflake reader) and the existing `warehouse/ansi.py` (the column query).
+- Host/database/port are auto-detected from the Fivetran destination
+  (`postgres_warehouse`/`aurora_postgres_warehouse`/`azure_postgres_warehouse`
+  → `postgres`); new `WAREHOUSE_HOST`/`WAREHOUSE_PORT` settings override
+  detection, mirroring `WAREHOUSE_DATABASE`. `DestinationInfo` gains `port`
+  (coerced from Fivetran's string config value) for any dialect that connects
+  directly rather than via an account identifier.
+- The reader fails fast with a clear `MetadataServiceError` when
+  `WAREHOUSE_PASSWORD` is missing — Postgres has no key-pair auth path, unlike
+  Snowflake — rather than surfacing a cryptic `psycopg2.connect(password=None)`
+  error, and likewise when host/database can't be resolved from either
+  settings or the destination.
+- `ansi.validate_identifier` factors out the bare-identifier check every reader
+  needs before interpolating a database/schema name into SQL (previously
+  duplicated in the Snowflake reader alone).
+
 ### Added (destination detection + column-level attributes)
 - `FivetranClient.get_destination` / `list_destinations` /
   `find_destination_for_group`. Fivetran documents destination `id` and `group_id`
