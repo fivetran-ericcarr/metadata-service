@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (warehouse enrichment fault isolation)
+- A PK-read failure (`read_primary_keys`, against the Fivetran Platform
+  Connector's `fivetran_metadata` schema) no longer prevents the column-schema
+  read (`read_column_schema`, against `INFORMATION_SCHEMA`) from running. The
+  two hit different warehouse objects and fail independently in practice —
+  most commonly, a warehouse credential with correct `INFORMATION_SCHEMA`
+  access but no Fivetran Platform Connector set up yet (so `fivetran_metadata`
+  simply doesn't exist). Previously the PK read ran first, unguarded, so its
+  failure raised past the column-schema read entirely and `data_type`/
+  `max_length`/`nullable`/`schema_source` silently stayed unpopulated even
+  though nothing stood in their way.
+- `build_scope.pk_enrichment` now reports PK-enrichment outcome only (its
+  literal name); a new sibling `column_schema_enrichment` reports the other
+  read's outcome. Previously `pk_enrichment` conflated both reads into one
+  signal, which (beyond being misleadingly named) meant drift would skip
+  comparing two builds whenever either read's status differed, even if the
+  one a consumer actually cared about hadn't changed.
+
 ### Added (Postgres warehouse reader)
 - `PostgresMetadataReader` (`warehouse/postgres_reader.py`), enabled via the
   new `warehouse-postgres` extra (`psycopg2-binary`). Reads the same two things
