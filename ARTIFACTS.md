@@ -111,7 +111,7 @@ The primary artifact. Top-level shape:
 | `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
-| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment}` (`pk_enrichment` reports the outcome of the whole warehouse-reader step — PKs *and* column attributes — as `not_requested`/`unavailable`/`ran`/`failed`). Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
+| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment, column_schema_enrichment}`. `pk_enrichment` and `column_schema_enrichment` each report `not_requested`/`unavailable`/`ran`/`failed` **independently** — the Platform Connector's `fivetran_metadata` schema and the destination's `INFORMATION_SCHEMA` are different objects, commonly accessible to a role one at a time (e.g. `INFORMATION_SCHEMA` works the moment the credential is granted; `fivetran_metadata` only exists once the Fivetran Platform Connector itself has been added and synced), so one failing must not suppress a read that would otherwise have succeeded. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
 
 ### 2.1 `sources.fivetran`
 
@@ -314,6 +314,20 @@ flags from the Fivetran Platform Connector's `fivetran_metadata` schema
 column). This recovers PKs the config API omits (e.g. GitHub) and reveals
 **composite** keys. Such columns are tagged `key_source: "fivetran_platform"`;
 `key_source` is `null` otherwise.
+
+This requires a prerequisite beyond the warehouse credential: the
+**[Fivetran Platform Connector](https://fivetran.com/docs/logs/fivetran-platform)**
+itself must be added (like any other connector, in the Fivetran dashboard) and
+have completed at least one sync — it's what creates `fivetran_metadata` and
+populates `SOURCE_COLUMN`/`COLUMN_LINEAGE`/etc. Granting a role SELECT on your
+business schemas does not create these tables; they don't exist anywhere in the
+destination until that connector has run. `WAREHOUSE_METADATA_SCHEMA` (default
+`fivetran_metadata`, matching the Platform Connector's own default) must name
+whatever schema you pointed that connector at, not a schema holding replicated
+business data. If this isn't set up yet, `build_scope.pk_enrichment` reads
+`"failed"` with an "object does not exist or not authorized" error in the
+logs — that failure is isolated to PK enrichment and does not block
+`column_schema_enrichment`, which needs no Platform Connector at all.
 
 **Column data types, lengths and nullability.** `data_type` has two possible
 sources and `data_type_source` always says which one was used:

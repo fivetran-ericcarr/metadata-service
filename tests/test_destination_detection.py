@@ -453,7 +453,9 @@ def test_enrichment_passes_the_detected_destination_to_the_factory(monkeypatch):
             "columns": {},
         }],
     })
-    assert pipeline._enrich_from_warehouse(Settings(), norm) == "ran"
+    assert pipeline._enrich_from_warehouse(Settings(), norm) == {
+        "pk_enrichment": "ran", "column_schema_enrichment": "ran",
+    }
 
     assert seen["destination"].warehouse_type == "snowflake"
     assert seen["destination"].database == "CENSUS"
@@ -494,17 +496,65 @@ def test_column_read_failure_keeps_authoritative_primary_keys(monkeypatch):
             "columns": {},
         }],
     })
-    assert pipeline._enrich_from_warehouse(Settings(), norm) == "ran"
+    assert pipeline._enrich_from_warehouse(Settings(), norm) == {
+        "pk_enrichment": "ran", "column_schema_enrichment": "failed",
+    }
     col = norm["connections"][0]["tables"][0]["columns"][0]
     assert col["is_primary_key"] is True
     assert col.get("data_type") is None
+
+
+def test_pk_read_failure_does_not_block_the_column_schema_read(monkeypatch):
+    """Regression: fivetran_metadata (PK read) and INFORMATION_SCHEMA (column
+    read) are different Snowflake objects, and in practice it's just as common
+    to have one without the other — e.g. credentials are configured and
+    INFORMATION_SCHEMA is readable, but the Fivetran Platform Connector hasn't
+    been added/synced yet, so fivetran_metadata's tables don't exist at all. A
+    PK-read failure must not prevent the column-schema read from running."""
+    from metadata_service import pipeline
+    from metadata_service.normalizers import FivetranNormalizer
+
+    class HalfBrokenReader:
+        def read_primary_keys(self, connection_ids=None):
+            raise RuntimeError(
+                "Object 'FIVETRAN_DESTINATION_DATABASE.RAW.SOURCE_COLUMN' does "
+                "not exist or not authorized."
+            )
+
+        def read_column_schema(self, schemas=None):
+            return {("salesforce", "account", "id"):
+                    {"data_type": "NUMBER", "max_length": None, "nullable": False}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("metadata_service.warehouse.get_warehouse_reader",
+                        lambda settings, destination=None: HalfBrokenReader())
+
+    norm = FivetranNormalizer().normalize({
+        "destination": SNOWFLAKE_DESTINATION,
+        "connections": [{
+            "detail": {"id": "c1"},
+            "schemas": {"schemas": {"salesforce": {"tables": {"account": {
+                "columns": {"Id": {"name_in_destination": "id", "enabled": True}}}}}}},
+            "columns": {},
+        }],
+    })
+    assert pipeline._enrich_from_warehouse(Settings(), norm) == {
+        "pk_enrichment": "failed", "column_schema_enrichment": "ran",
+    }
+    col = norm["connections"][0]["tables"][0]["columns"][0]
+    assert col["is_primary_key"] is False  # no PK signal, but not lost collaterally
+    assert col["data_type"] == "NUMBER" and col["nullable"] is False
 
 
 def test_enrichment_unavailable_without_a_destination_or_settings(monkeypatch):
     from metadata_service import pipeline
 
     norm = {"destination": None, "connections": []}
-    assert pipeline._enrich_from_warehouse(Settings(), norm) == "unavailable"
+    assert pipeline._enrich_from_warehouse(Settings(), norm) == {
+        "pk_enrichment": "unavailable", "column_schema_enrichment": "unavailable",
+    }
 
 
 def test_warehouse_read_overrides_the_catalog_in_the_built_document(fivetran_raw, dbt_raw):

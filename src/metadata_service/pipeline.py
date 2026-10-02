@@ -109,7 +109,7 @@ def build_metadata(
     enrich_warehouse: bool = True,
 ) -> dict:
     """Run extraction + normalization and return the normalized document."""
-    enrichment = "not_requested"
+    enrichment = {"pk_enrichment": "not_requested", "column_schema_enrichment": "not_requested"}
     if fixtures_dir:
         fivetran_raw, dbt_raw, activations_raw = _load_fixture_payloads(Path(fixtures_dir))
         # Fixtures mode always loads all three payloads regardless of include_*,
@@ -159,7 +159,8 @@ def build_metadata(
         "dbt_project_id": dbt_project_id,
         "dbt_job_id": dbt_job_id,
         "fixtures": bool(fixtures_dir),
-        "pk_enrichment": enrichment,
+        "pk_enrichment": enrichment["pk_enrichment"],
+        "column_schema_enrichment": enrichment["column_schema_enrichment"],
     }
     logger.info(
         "Built metadata: %s warehouse objects, %s recommendations, %s errors",
@@ -286,24 +287,32 @@ def _extract_fivetran(
         )
 
 
-def _enrich_from_warehouse(settings: Settings, fivetran_norm: dict) -> str:
+def _enrich_from_warehouse(settings: Settings, fivetran_norm: dict) -> dict:
     """Enrich normalized columns from the destination warehouse (best-effort).
 
-    Two independent reads: PK flags from the Platform Connector's
-    ``fivetran_metadata``, and data_type/max_length/nullable from the
-    destination's INFORMATION_SCHEMA. Returns the outcome for build_scope:
-    ``unavailable`` (no reader configured/supported), ``ran`` (applied), or
-    ``failed``.
+    Two reads against the same reader object, each hitting a DIFFERENT
+    Snowflake object and so failing independently in practice: PK flags from
+    the Fivetran Platform Connector's ``fivetran_metadata`` schema (which only
+    exists once that connector has been added and synced at least once — a
+    separate setup step from granting warehouse credentials), and
+    data_type/max_length/nullable from the destination's own
+    INFORMATION_SCHEMA (which needs no Platform Connector at all — any role
+    with SELECT on the database can read it). A role/setup that satisfies one
+    and not the other is the common case, not the exception, so each read gets
+    its own guard and its own outcome rather than one failure masking a read
+    that would otherwise have succeeded.
+
+    Returns ``{"pk_enrichment": ..., "column_schema_enrichment": ...}`` for
+    build_scope, each ``not_requested`` (caller didn't run this function at
+    all), ``unavailable`` (no reader configured/supported), ``ran``, or
+    ``failed``. Keeping them as two keys (not collapsed into one) matters for
+    drift: two builds where PK enrichment succeeded in one and failed in the
+    other must not be diffed as like-for-like just because their column-schema
+    outcome happens to match.
 
     The reader construction is inside the guard too: a misconfigured reader
     (e.g. a bad WAREHOUSE_DATABASE) must not abort the whole build — enrichment
-    is best-effort. The outcome is recorded in build_scope so a build where
-    enrichment silently didn't run isn't drift-compared against one where it did
-    (which would mass-fire primary_key_changed in both directions).
-
-    The column read is nested in its own guard: a warehouse that grants the
-    read-only role SELECT on fivetran_metadata but not on INFORMATION_SCHEMA
-    should still keep its authoritative PKs rather than losing both.
+    is best-effort.
     """
     from .warehouse import (
         apply_column_schema,
@@ -317,28 +326,38 @@ def _enrich_from_warehouse(settings: Settings, fivetran_norm: dict) -> str:
         destination = destination_from_dict(fivetran_norm.get("destination"))
         reader = get_warehouse_reader(settings, destination)
         if reader is None:
-            return "unavailable"
-        connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", [])
-                          if c.get("connection_id")]
-        pk_map = reader.read_primary_keys(connection_ids or None)
-        updated = apply_primary_keys(fivetran_norm, pk_map)
-        logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
+            return {"pk_enrichment": "unavailable", "column_schema_enrichment": "unavailable"}
 
+        pk_outcome = "failed"
+        try:
+            connection_ids = [c.get("connection_id") for c in fivetran_norm.get("connections", [])
+                              if c.get("connection_id")]
+            pk_map = reader.read_primary_keys(connection_ids or None)
+            updated = apply_primary_keys(fivetran_norm, pk_map)
+            logger.info("Enriched %s primary-key columns from fivetran_metadata", updated)
+            pk_outcome = "ran"
+        except Exception as exc:
+            # The reader was EXPLICITLY configured, so a silent skip means PKs
+            # quietly stop being authoritative — log at ERROR, not a warning
+            # nobody reads. Does NOT skip the column-schema read below: that
+            # one has no dependency on fivetran_metadata existing at all.
+            logger.error("Warehouse PK enrichment FAILED (reader is configured): %s", exc)
+
+        column_outcome = "failed"
         try:
             schemas = _destination_schemas(fivetran_norm)
             column_map = reader.read_column_schema(schemas or None)
             enriched = apply_column_schema(fivetran_norm, column_map)
             logger.info("Enriched %s columns with data_type/max_length/nullable from "
                         "INFORMATION_SCHEMA", enriched)
+            column_outcome = "ran"
         except Exception as exc:
-            logger.error("Column-schema enrichment FAILED (PK enrichment still applied): %s", exc)
+            logger.error("Column-schema enrichment FAILED (PK enrichment unaffected): %s", exc)
 
-        return "ran"
-    except Exception as exc:  # never fail the build on enrichment
-        # The reader was EXPLICITLY configured, so a silent skip means PKs quietly
-        # stop being authoritative — log at ERROR, not a warning nobody reads.
-        logger.error("Warehouse PK enrichment FAILED (reader is configured): %s", exc)
-        return "failed"
+        return {"pk_enrichment": pk_outcome, "column_schema_enrichment": column_outcome}
+    except Exception as exc:  # reader construction itself blew up
+        logger.error("Warehouse reader construction FAILED (reader is configured): %s", exc)
+        return {"pk_enrichment": "failed", "column_schema_enrichment": "failed"}
     finally:
         if reader is not None:
             try:
