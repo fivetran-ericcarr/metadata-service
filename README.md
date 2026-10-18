@@ -160,6 +160,7 @@ metadata-service activations extract                    # -> activations_raw_lat
 metadata-service build --group-id <group>               # full build -> latest.json snapshot
 metadata-service build --no-activations                 # skip the reverse-ETL readiness gate
 metadata-service build --fixtures-dir tests/fixtures    # OFFLINE build from fixtures (no creds)
+metadata-service build --fivetran-fixtures-dir <dir>    # Fivetran from fixtures; dbt + warehouse LIVE
 
 # Connection filters (apply to `fivetran extract` and `build`):
 metadata-service fivetran extract --connected-only      # skip broken/incomplete setups
@@ -175,6 +176,18 @@ metadata-service serve-mcp                              # start MCP server (need
 
 The offline `--fixtures-dir` mode is the quickest way to see a real `latest.json`
 without any credentials.
+
+`--fivetran-fixtures-dir` is the mixed mode: only the Fivetran payload
+(`fivetran_connections.json`, `fivetran_schema_config.json`,
+`fivetran_columns.json`, optional `fivetran_destination.json`) comes from the
+directory, while dbt, Activations and warehouse enrichment run live. Use it when
+the warehouse tables are real but no Fivetran connection in this account
+reports them — a seeded demo, or a connection that lives in another account.
+`fivetran_destination.json` is what points the warehouse reader at the real
+database. Unlike `--fixtures-dir`, a mixed build persists `latest.json` by
+default (it carries live data), and records `build_scope.fivetran_fixtures:
+true` so it never drift-compares against a live-Fivetran build. The two flags
+are mutually exclusive.
 
 ## 6. REST API
 
