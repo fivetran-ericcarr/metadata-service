@@ -1,0 +1,202 @@
+{
+  "_comment": "Mirrors dbt Cloud job 1149491 / run 520391059: deps -> source freshness -> build (warns) -> docs generate. 'artifacts' maps step index (or 'default' = no step param = last step) to the run_results.json served; absent steps 404.",
+  "run": {
+    "id": 520391059,
+    "status": 10,
+    "status_humanized": "Success",
+    "finished_at": "2026-10-19T18:50:00Z"
+  },
+  "run_steps": [
+    {
+      "index": 1,
+      "name": "Clone git repository"
+    },
+    {
+      "index": 2,
+      "name": "Create profile from connection guidewire_dq_demo_snowflake"
+    },
+    {
+      "index": 3,
+      "name": "Invoke dbt with `dbt deps`"
+    },
+    {
+      "index": 4,
+      "name": "Invoke dbt with `dbt source freshness`"
+    },
+    {
+      "index": 5,
+      "name": "Invoke dbt with `dbt build`"
+    },
+    {
+      "index": 6,
+      "name": "Invoke dbt with `Generation of docs`"
+    }
+  ],
+  "run_results": {
+    "default": {
+      "metadata": {
+        "dbt_version": "1.10.0",
+        "invocation_id": "inv-generate",
+        "generated_at": "2026-10-19T18:48:26Z"
+      },
+      "args": {
+        "which": "generate"
+      },
+      "elapsed_time": 1.0,
+      "results": [
+        {
+          "unique_id": "model.demo.stg_salesforce__account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "model.demo.dim_account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.unique_stg_salesforce__account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_dim_account_account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        }
+      ]
+    },
+    "5": {
+      "metadata": {
+        "dbt_version": "1.10.0",
+        "invocation_id": "inv-build",
+        "generated_at": "2026-10-19T18:48:26Z"
+      },
+      "args": {
+        "which": "build"
+      },
+      "elapsed_time": 1.0,
+      "results": [
+        {
+          "unique_id": "model.demo.stg_salesforce__account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+          "status": "pass",
+          "execution_time": 0.1,
+          "failures": 0,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.unique_stg_salesforce__account_id",
+          "status": "warn",
+          "execution_time": 0.1,
+          "failures": 3,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+          "status": "warn",
+          "execution_time": 0.1,
+          "failures": 1,
+          "message": null
+        },
+        {
+          "unique_id": "model.demo.dim_account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_dim_account_account_id",
+          "status": "pass",
+          "execution_time": 0.1,
+          "failures": 0,
+          "message": null
+        }
+      ]
+    },
+    "6": {
+      "metadata": {
+        "dbt_version": "1.10.0",
+        "invocation_id": "inv-generate",
+        "generated_at": "2026-10-19T18:48:26Z"
+      },
+      "args": {
+        "which": "generate"
+      },
+      "elapsed_time": 1.0,
+      "results": [
+        {
+          "unique_id": "model.demo.stg_salesforce__account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "model.demo.dim_account",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.unique_stg_salesforce__account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        },
+        {
+          "unique_id": "test.demo.not_null_dim_account_account_id",
+          "status": "success",
+          "execution_time": 0.1,
+          "failures": null,
+          "message": null
+        }
+      ]
+    }
+  }
+}

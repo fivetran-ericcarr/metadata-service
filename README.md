@@ -341,6 +341,11 @@ that Protocol and wiring it into `get_storage`.
   dangerous false positives). Use the `aliases` map for known exceptions.
 - dbt metadata is derived from run **artifacts** (manifest/catalog/run_results/
   sources). The Discovery GraphQL API is supported but optional.
+- dbt Cloud serves artifacts as of a run's last step. When that step isn't
+  `build`/`test` (e.g. a trailing `dbt docs generate`), test statuses are read
+  from the run's build/test step(s) via the artifacts `?step=` parameter; if a
+  run has no executing step at all, statuses are reported as unknown (with a
+  `NonTestRunResults` error) — never as compile `success`.
 - Relationship and accepted-values recommendations are heuristic and labeled as
   such; they are suggestions, not assertions.
 

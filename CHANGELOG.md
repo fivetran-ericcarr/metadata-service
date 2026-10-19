@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (dbt Cloud multi-step runs reported warning/failing tests as passing)
+- dbt Cloud's artifacts endpoint returns each artifact as of the run's LAST
+  step. For a job like `dbt deps` -> `dbt source freshness` -> `dbt build` ->
+  `dbt docs generate`, `run_results.json` was the docs-generate one
+  (`args.which == "generate"`): a compile `success` for every node. The
+  snapshot therefore showed every test as `success` even when the build had
+  `warn`/`fail` tests — the DQ layer failed open. The extractor now detects a
+  non-build/test `run_results.json` and walks the run's steps
+  (`?step=<run_steps[].index>`), merging every executing step (`build`, `test`,
+  `retry`, `run`, `seed`, `snapshot`) in step order with the latest status per
+  `unique_id` winning (so `dbt run` + `dbt test` and `dbt build` + `dbt retry`
+  resolve correctly). Runs whose last step is already build/test cost no extra
+  calls. All steps belong to the same run, so the one-run artifact rule holds.
+  The steps used are recorded in raw `artifacts.run_results_steps`.
+- Defensive guard in the dbt normalizer (applies to every input path, including
+  fixtures): a `run_results.json` written by a non-executing command
+  (`generate`, `compile`, `run-operation`, ...) is ignored and a
+  `NonTestRunResults` error is recorded, so statuses read as unknown rather
+  than passing.
+- `DbtClient.get_run_artifact` gains `step=`; `DbtClient.get_run` gains
+  `include_related=`.
+
 ### Added (mixed fixture/live builds)
 - `build --fivetran-fixtures-dir <dir>` (and `fivetran_fixtures_dir=` on
   `build_metadata`/`build_and_store`) loads ONLY the Fivetran payload from
