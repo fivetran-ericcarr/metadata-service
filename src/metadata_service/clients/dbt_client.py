@@ -17,6 +17,7 @@ ever found to reject ``Bearer``, this should become conditional on
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -215,20 +216,32 @@ class DbtClient:
             offset += len(data)
         return out[:limit]
 
-    def get_run(self, account_id: str, run_id: int) -> dict:
-        return self._data(self._get_json(f"/v2/accounts/{account_id}/runs/{run_id}/")) or {}
+    def get_run(self, account_id: str, run_id: int,
+                include_related: list[str] | None = None) -> dict:
+        """Fetch one run. ``include_related=["run_steps"]`` adds the run's steps
+        (each with a 1-based ``index`` — the value the artifacts ``step`` param takes)."""
+        params = {"include_related": json.dumps(include_related)} if include_related else None
+        return self._data(self._get_json(f"/v2/accounts/{account_id}/runs/{run_id}/", params=params)) or {}
 
-    def get_run_artifact(self, account_id: str, run_id: int, path: str) -> dict:
+    def get_run_artifact(self, account_id: str, run_id: int, path: str,
+                         step: int | None = None) -> dict:
         """Download a single run artifact (manifest.json, catalog.json, ...).
 
         Artifacts are returned as raw JSON (not wrapped in a ``data`` envelope).
         The artifact endpoint rejects ``Accept: application/json`` with a 406, so we
         override the Accept header to ``*/*`` for this request only.
+
+        Without ``step`` dbt Cloud returns the artifact as of the run's LAST step
+        (e.g. a trailing ``dbt docs generate`` overwrites ``run_results.json`` with
+        compile results). ``step`` (1-based ``run_steps[].index``) selects the
+        artifact as of that step; a step that produced none returns 404.
         """
+        params = {"step": step} if step is not None else None
         try:
             resp = self._request(
                 "GET",
                 f"/v2/accounts/{account_id}/runs/{run_id}/artifacts/{path}",
+                params=params,
                 headers={"Accept": "*/*"},
             )
         except DbtArtifactNotFoundError:
