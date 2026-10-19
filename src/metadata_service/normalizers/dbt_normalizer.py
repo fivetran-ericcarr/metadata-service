@@ -11,6 +11,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ``run_results.json`` ``args.which`` values whose results are node EXECUTION
+# statuses (pass/warn/fail/error/success/skipped). Every other command that
+# writes run_results — ``generate`` (docs generate), ``compile``,
+# ``run-operation``, ``show``, ... — reports a compile/invoke ``success`` per node,
+# which says nothing about whether tests passed.
+TEST_BEARING_COMMANDS = frozenset({"build", "test", "retry"})
+EXECUTING_COMMANDS = TEST_BEARING_COMMANDS | {"run", "seed", "snapshot"}
+
+
+def run_results_command(run_results: dict | None) -> str | None:
+    """The dbt command that wrote a run_results.json (``args.which``), or None
+    when unknown (old dbt versions / hand-built fixtures without ``args``)."""
+    if not isinstance(run_results, dict):
+        return None
+    which = (run_results.get("args") or {}).get("which")
+    return str(which) if which else None
+
 
 class DbtNormalizer:
     def normalize(self, raw: dict) -> dict:
@@ -22,6 +39,19 @@ class DbtNormalizer:
         sources_artifact = artifacts.get("sources") or {}
 
         warnings: list[dict] = list(raw.get("errors") or [])
+
+        command = run_results_command(run_results)
+        if command is not None and command not in EXECUTING_COMMANDS:
+            # Fail CLOSED: compile-style "success" must never read as passing tests.
+            warnings.append({
+                "source": "dbt", "artifact": "run_results.json",
+                "run_id": artifacts.get("artifacts_run_id"),
+                "error_type": "NonTestRunResults",
+                "error_message": f"run_results.json was written by `dbt {command}`, not a "
+                                 f"build/test step, so it carries no test results. Model/test "
+                                 f"statuses are UNKNOWN (not passing) in this snapshot.",
+            })
+            run_results = {}
 
         run_status = self._index_run_results(run_results)
         freshness = self._index_freshness(sources_artifact)

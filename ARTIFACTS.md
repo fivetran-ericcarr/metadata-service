@@ -64,11 +64,24 @@ DQ application should consume the **normalized snapshot** (section 2), not these
     "manifest": { "...": "manifest.json" },
     "catalog": { "...": "catalog.json" },
     "run_results": { "...": "run_results.json" },
-    "sources": { "...": "sources.json (freshness)" }
+    "sources": { "...": "sources.json (freshness)" },
+    "artifacts_run_id": 520391059,
+    "run_results_steps": [5]
   },
   "errors": []
 }
 ```
+
+All artifacts come from ONE run. dbt Cloud serves each artifact as of the run's
+**last** step, so a job ending in `dbt docs generate` / `compile` /
+`run-operation` would hand back compile `success` for every node and hide the
+build's warns/failures. When the last step's `run_results.json` is not from
+`build`/`test`/`retry` (`args.which`), the extractor walks the run's steps
+(`GET .../artifacts/run_results.json?step=<run_steps[].index>`) and merges every
+executing step (`build`, `test`, `retry`, `run`, `seed`, `snapshot`) in step
+order — the latest status per `unique_id` wins. `run_results_steps` records the
+step indices used (absent when the last step was already test-bearing, which
+costs no extra API calls). `manifest`/`catalog`/`sources` stay the last step's.
 
 `errors[]` entries (both extracts) carry enough context to locate the failure
 without aborting the run, e.g.:
@@ -510,6 +523,11 @@ normalization. Each entry includes at least `error_type` and `error_message`,
 plus whatever context is available (`source`, `connection_id`, `schema`,
 `table`, `run_id`, `artifact`, `unique_id`). The pipeline never silently
 swallows errors and never logs credentials.
+
+`NonTestRunResults` (dbt) means the only `run_results.json` available was
+written by a non-executing command (`args.which` such as `generate`, `compile`,
+`run-operation`). It is ignored rather than read as passing: every model's and
+test's `latest_status` is `null` (**unknown**, not passing) in that snapshot.
 
 ### 2.7 `activations`
 

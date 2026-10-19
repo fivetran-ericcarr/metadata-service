@@ -18,6 +18,11 @@ from ..exceptions import (
     DbtRateLimitError,
 )
 from ..models.common import utcnow_iso
+from ..normalizers.dbt_normalizer import (
+    EXECUTING_COMMANDS,
+    TEST_BEARING_COMMANDS,
+    run_results_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +138,7 @@ class DbtExtractor:
                     errors.append({"source": "dbt", "run_id": run_id, "artifact": path,
                                    "error_type": type(exc).__name__, "error_message": str(exc)})
             if "manifest" in artifacts:
+                self._resolve_step_run_results(run, artifacts, errors)
                 if fallback:
                     errors.append({
                         "source": "dbt", "run_id": run_id,
@@ -150,6 +156,86 @@ class DbtExtractor:
             "error_message": "Could not download manifest.json from any recent run.",
         })
         return {}
+
+    def _resolve_step_run_results(self, run: dict, artifacts: dict, errors: list[dict]) -> None:
+        """Replace a non-test run_results.json with the run's build/test step results.
+
+        dbt Cloud serves each artifact as of the run's LAST step. A job ending in
+        ``dbt docs generate`` (or compile / run-operation / ...) therefore returns
+        run_results with a compile ``success`` for every node, hiding the warns and
+        failures of the earlier ``dbt build`` — the snapshot would fail OPEN.
+
+        When the default run_results is already from build/test/retry nothing else
+        is fetched (the common case costs no extra calls). Otherwise the run's
+        steps are walked via ``?step=<index>`` and every executing step
+        (build/test/retry/run/seed/snapshot) is merged in step order, the LATEST
+        status per unique_id winning — so ``dbt run`` + ``dbt test`` or a ``dbt
+        build`` + ``dbt retry`` both resolve to the current state of each node.
+        All steps belong to this one run, so the single-run rule above holds;
+        manifest/catalog/sources stay the last step's (same code checkout).
+
+        If no executing step exists the default is left in place and the
+        normalizer's ``NonTestRunResults`` guard marks statuses unknown.
+        """
+        default = artifacts.get("run_results")
+        command = run_results_command(default)
+        if default is not None and (command is None or command in TEST_BEARING_COMMANDS):
+            return  # already test-bearing (or legacy without args: keep as before)
+
+        run_id = run.get("id")
+        steps = run.get("run_steps")
+        if not steps:
+            try:
+                steps = (self._client.get_run(self._account_id, run_id,
+                                              include_related=["run_steps"]) or {}).get("run_steps")
+            except _FATAL_ERRORS:
+                raise
+            except DbtError as exc:
+                errors.append({"source": "dbt", "run_id": run_id, "resource": "run_steps",
+                               "error_type": type(exc).__name__, "error_message": str(exc)})
+                return
+        indices = sorted({s.get("index") for s in steps or [] if isinstance(s.get("index"), int)})
+
+        selected: list[tuple[int, dict]] = []
+        seen_invocations: set[str] = set()
+        for index in indices:
+            try:
+                doc = self._client.get_run_artifact(self._account_id, run_id, "run_results.json", step=index)
+            except DbtArtifactNotFoundError:
+                continue  # step wrote no run_results (clone, deps, freshness, ...)
+            except _FATAL_ERRORS:
+                raise
+            except DbtError as exc:
+                errors.append({"source": "dbt", "run_id": run_id, "step": index,
+                               "artifact": "run_results.json",
+                               "error_type": type(exc).__name__, "error_message": str(exc)})
+                continue
+            # Later steps re-serve an earlier step's file when they write none of their own.
+            invocation = ((doc or {}).get("metadata") or {}).get("invocation_id")
+            if invocation:
+                if invocation in seen_invocations:
+                    continue
+                seen_invocations.add(invocation)
+            if run_results_command(doc) in EXECUTING_COMMANDS:
+                selected.append((index, doc))
+
+        if not selected:
+            return
+
+        merged: dict[str, dict] = {}
+        for _, doc in selected:
+            for result in doc.get("results") or []:
+                uid = result.get("unique_id")
+                if uid:
+                    merged.pop(uid, None)  # re-insert so order follows the latest result
+                    merged[uid] = result
+        base = next((d for _, d in reversed(selected)
+                     if run_results_command(d) in TEST_BEARING_COMMANDS), selected[-1][1])
+        artifacts["run_results"] = dict(base, results=list(merged.values()))
+        artifacts["run_results_steps"] = [i for i, _ in selected]  # provenance
+        logger.info("dbt run %s: run_results.json resolved from step(s) %s (%s) instead of the "
+                    "last step (%s)", run_id, artifacts["run_results_steps"],
+                    ", ".join(run_results_command(d) for _, d in selected), command)
 
     @staticmethod
     def _safe(fn, errors: list[dict], what: str):
