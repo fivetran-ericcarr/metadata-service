@@ -29,6 +29,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DbtClient.get_run_artifact` gains `step=`; `DbtClient.get_run` gains
   `include_related=`.
 
+### Added (mixed fixture/live builds)
+- `build --fivetran-fixtures-dir <dir>` (and `fivetran_fixtures_dir=` on
+  `build_metadata`/`build_and_store`) loads ONLY the Fivetran payload from
+  fixture files while dbt, Activations and warehouse enrichment run live.
+  Previously `--fixtures-dir` was all-or-nothing: it replaced every source and
+  also skipped warehouse enrichment, so there was no way to pair simulated
+  Fivetran connection metadata (for warehouse tables no Fivetran connection in
+  the account reports, e.g. a seeded demo) with real dbt Cloud artifacts and a
+  real `INFORMATION_SCHEMA` read. The fixture's `fivetran_destination.json`
+  supplies the destination the reader connects to.
+- A missing `fivetran_connections.json` in that directory is an error, not an
+  empty Fivetran section — a typo'd path must not build a live-dbt snapshot with
+  zero Fivetran objects. `--fixtures-dir` and `--fivetran-fixtures-dir` are
+  mutually exclusive, as are `--fivetran-fixtures-dir` and `--no-fivetran`.
+- Mixed builds persist `latest.json` by default (they carry live data and are
+  meant to be served); only the fully offline `--fixtures-dir` build stays a
+  dry run by default.
+- `build_scope.fivetran_fixtures` records the mode, so a mixed build is never
+  drift-compared like-for-like against a live-Fivetran build. Being a new key,
+  the first build after upgrading reports a single `comparison_skipped` drift
+  marker against an older snapshot.
+
 ### Fixed (warehouse enrichment fault isolation)
 - A PK-read failure (`read_primary_keys`, against the Fivetran Platform
   Connector's `fivetran_metadata` schema) no longer prevents the column-schema

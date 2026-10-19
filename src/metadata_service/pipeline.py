@@ -2,7 +2,9 @@
 
 Shared by the CLI, REST API, and MCP server so they all build snapshots the
 same way. Supports an offline ``fixtures_dir`` mode that loads raw payloads from
-JSON fixtures instead of calling live APIs.
+JSON fixtures instead of calling live APIs, and a mixed ``fivetran_fixtures_dir``
+mode that loads ONLY the Fivetran payload from fixtures while dbt, Activations,
+and warehouse enrichment stay live.
 """
 
 from __future__ import annotations
@@ -101,6 +103,7 @@ def build_metadata(
     include_dbt: bool = True,
     include_activations: bool = True,
     fixtures_dir: str | None = None,
+    fivetran_fixtures_dir: str | None = None,
     aliases: dict | None = None,
     connected_only: bool = False,
     skip_paused: bool = False,
@@ -108,7 +111,21 @@ def build_metadata(
     dbt_job_id: int | None = None,
     enrich_warehouse: bool = True,
 ) -> dict:
-    """Run extraction + normalization and return the normalized document."""
+    """Run extraction + normalization and return the normalized document.
+
+    ``fixtures_dir`` replaces EVERY source with fixtures (fully offline).
+    ``fivetran_fixtures_dir`` replaces only the Fivetran API payload: dbt and
+    Activations are still extracted live and warehouse enrichment still runs
+    against the destination described by the fixture's
+    ``fivetran_destination.json``. Use it when the warehouse tables are real but
+    are not (yet) synced by a Fivetran connection the API knows about — a
+    seeded demo, or a connection in another account.
+    """
+    if fixtures_dir and fivetran_fixtures_dir:
+        raise ValueError("fixtures_dir and fivetran_fixtures_dir are mutually exclusive: "
+                         "fixtures_dir already loads the Fivetran payload from fixtures.")
+    if fivetran_fixtures_dir and not include_fivetran:
+        raise ValueError("fivetran_fixtures_dir conflicts with include_fivetran=False.")
     enrichment = {"pk_enrichment": "not_requested", "column_schema_enrichment": "not_requested"}
     if fixtures_dir:
         fivetran_raw, dbt_raw, activations_raw = _load_fixture_payloads(Path(fixtures_dir))
@@ -117,11 +134,14 @@ def build_metadata(
         eff_fivetran, eff_dbt, eff_activations = True, True, True
     else:
         eff_fivetran = include_fivetran
-        fivetran_raw = (
-            _extract_fivetran(settings, group_id, connected_only=connected_only, skip_paused=skip_paused)
-            if include_fivetran
-            else _empty_fivetran()
-        )
+        if fivetran_fixtures_dir:
+            fivetran_raw = _load_fivetran_fixtures(Path(fivetran_fixtures_dir), required=True)
+        elif include_fivetran:
+            fivetran_raw = _extract_fivetran(
+                settings, group_id, connected_only=connected_only, skip_paused=skip_paused
+            )
+        else:
+            fivetran_raw = _empty_fivetran()
         # dbt degrades like activations when its credentials are absent, instead
         # of aborting the whole build — a Fivetran-only deployment must still
         # produce a snapshot.
@@ -159,6 +179,10 @@ def build_metadata(
         "dbt_project_id": dbt_project_id,
         "dbt_job_id": dbt_job_id,
         "fixtures": bool(fixtures_dir),
+        # Fivetran-from-fixtures with live dbt/warehouse is a different
+        # population than a live Fivetran build, so it must not drift-compare
+        # against one as like-for-like.
+        "fivetran_fixtures": bool(fivetran_fixtures_dir),
         "pk_enrichment": enrichment["pk_enrichment"],
         "column_schema_enrichment": enrichment["column_schema_enrichment"],
     }
@@ -179,6 +203,7 @@ def build_and_store(
     include_dbt: bool = True,
     include_activations: bool = True,
     fixtures_dir: str | None = None,
+    fivetran_fixtures_dir: str | None = None,
     aliases: dict | None = None,
     connected_only: bool = False,
     skip_paused: bool = False,
@@ -210,6 +235,7 @@ def build_and_store(
             include_dbt=include_dbt,
             include_activations=include_activations,
             fixtures_dir=fixtures_dir,
+            fivetran_fixtures_dir=fivetran_fixtures_dir,
             aliases=aliases,
             connected_only=connected_only,
             skip_paused=skip_paused,
@@ -410,9 +436,19 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict, dict]:
-    """Assemble raw Fivetran + dbt + activations payloads from fixture files (offline build)."""
-    connections_fix = _load_json(fixtures / "fivetran_connections.json")
+def _load_fivetran_fixtures(fixtures: Path, *, required: bool = False) -> dict:
+    """Assemble a raw Fivetran payload (the FivetranExtractor's output shape)
+    from ``fivetran_connections.json`` + ``fivetran_schema_config.json`` +
+    ``fivetran_columns.json`` (+ optional ``fivetran_destination.json``).
+
+    ``required`` makes a missing connections file an error instead of an empty
+    payload: in the mixed fixture/live mode a typo'd path would otherwise build
+    a snapshot with live dbt and zero Fivetran objects, silently.
+    """
+    connections_path = fixtures / "fivetran_connections.json"
+    if required and not connections_path.exists():
+        raise FileNotFoundError(f"Fivetran fixtures not found: {connections_path}")
+    connections_fix = _load_json(connections_path)
     schema_fix = _load_json(fixtures / "fivetran_schema_config.json")
     columns_fix = _load_json(fixtures / "fivetran_columns.json")
 
@@ -428,15 +464,21 @@ def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict, dict]:
                 "connector_type": None,
             }
         )
-    fivetran_raw = {
+    return {
         "extracted_at": connections_fix.get("extracted_at"),
         "source": "fivetran",
-        # Optional: lets an offline build exercise destination detection and the
-        # `database` field without reaching the API.
+        # Optional: lets a fixtures build exercise destination detection and the
+        # `database` field without reaching the API. In the mixed mode it is also
+        # what points warehouse enrichment at the real destination.
         "destination": _load_json(fixtures / "fivetran_destination.json") or None,
         "connections": fivetran_connections,
         "errors": [],
     }
+
+
+def _load_fixture_payloads(fixtures: Path) -> tuple[dict, dict, dict]:
+    """Assemble raw Fivetran + dbt + activations payloads from fixture files (offline build)."""
+    fivetran_raw = _load_fivetran_fixtures(fixtures)
 
     dbt_raw = {
         "extracted_at": None,
