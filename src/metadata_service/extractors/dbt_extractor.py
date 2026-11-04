@@ -20,6 +20,7 @@ from ..exceptions import (
 from ..models.common import utcnow_iso
 from ..normalizers.dbt_normalizer import (
     EXECUTING_COMMANDS,
+    REUSED_STATUS,
     TEST_BEARING_COMMANDS,
     run_results_command,
 )
@@ -42,9 +43,10 @@ _ARTIFACT_KEYS = {
 
 
 class DbtExtractor:
-    def __init__(self, client: DbtClient, account_id: str) -> None:
+    def __init__(self, client: DbtClient, account_id: str, *, reused_lookback_runs: int = 10) -> None:
         self._client = client
         self._account_id = account_id
+        self._reused_lookback_runs = max(0, int(reused_lookback_runs))
 
     def extract(
         self,
@@ -139,6 +141,7 @@ class DbtExtractor:
                                    "error_type": type(exc).__name__, "error_message": str(exc)})
             if "manifest" in artifacts:
                 self._resolve_step_run_results(run, artifacts, errors)
+                self._carry_forward_reused(run, runs, artifacts, errors)
                 if fallback:
                     errors.append({
                         "source": "dbt", "run_id": run_id,
@@ -178,9 +181,24 @@ class DbtExtractor:
         normalizer's ``NonTestRunResults`` guard marks statuses unknown.
         """
         default = artifacts.get("run_results")
+        resolved, steps = self._step_run_results(run, default, errors)
+        if steps is None:
+            return
+        artifacts["run_results"] = resolved
+        artifacts["run_results_steps"] = steps  # provenance
+        logger.info("dbt run %s: run_results.json resolved from step(s) %s instead of the "
+                    "last step (%s)", run.get("id"), steps, run_results_command(default))
+
+    def _step_run_results(self, run: dict, default: dict | None,
+                          errors: list[dict]) -> tuple[dict | None, list[int] | None]:
+        """The test-bearing run_results of ``run`` and the steps it was merged from.
+
+        Returns ``(default, None)`` when the default artifact is already
+        test-bearing (or legacy without ``args``) or no executing step exists.
+        """
         command = run_results_command(default)
         if default is not None and (command is None or command in TEST_BEARING_COMMANDS):
-            return  # already test-bearing (or legacy without args: keep as before)
+            return default, None  # already test-bearing (or legacy without args: keep as before)
 
         run_id = run.get("id")
         steps = run.get("run_steps")
@@ -193,7 +211,7 @@ class DbtExtractor:
             except DbtError as exc:
                 errors.append({"source": "dbt", "run_id": run_id, "resource": "run_steps",
                                "error_type": type(exc).__name__, "error_message": str(exc)})
-                return
+                return default, None
         indices = sorted({s.get("index") for s in steps or [] if isinstance(s.get("index"), int)})
 
         selected: list[tuple[int, dict]] = []
@@ -220,7 +238,7 @@ class DbtExtractor:
                 selected.append((index, doc))
 
         if not selected:
-            return
+            return default, None
 
         merged: dict[str, dict] = {}
         for _, doc in selected:
@@ -231,11 +249,108 @@ class DbtExtractor:
                     merged[uid] = result
         base = next((d for _, d in reversed(selected)
                      if run_results_command(d) in TEST_BEARING_COMMANDS), selected[-1][1])
-        artifacts["run_results"] = dict(base, results=list(merged.values()))
-        artifacts["run_results_steps"] = [i for i, _ in selected]  # provenance
-        logger.info("dbt run %s: run_results.json resolved from step(s) %s (%s) instead of the "
-                    "last step (%s)", run_id, artifacts["run_results_steps"],
-                    ", ".join(run_results_command(d) for _, d in selected), command)
+        return dict(base, results=list(merged.values())), [i for i, _ in selected]
+
+    def _carry_forward_reused(self, anchor: dict, runs: list[dict], artifacts: dict,
+                              errors: list[dict]) -> None:
+        """Find the last EXECUTED result of every node the anchor run reports ``reused``.
+
+        dbt State (state-aware orchestration, default on dbt Fusion) skips a node
+        whose code and upstream data are unchanged and writes ``status: reused``
+        ("NO-OP - No new changes on any upstreams") — the last result stands, but
+        this run_results does not say what it was. Read alone, a fully-reused run
+        has no test evidence at all.
+
+        Earlier runs of the same extraction scope (newest first, any finished
+        run — an errored run's executed nodes are still real executions) are
+        walked until every reused node has an executed status, or
+        ``reused_lookback_runs`` runs were read. A candidate result is only taken
+        when its ``compiled_code`` matches the reused one (whitespace-insensitive;
+        compared when both sides carry it): a different compiled SQL means the
+        result came from a different code version and does not stand for this
+        node. Nodes still unresolved stay ``reused`` and the normalizer marks
+        them unverified (never passing).
+
+        Result: ``artifacts["reused_last_executed"] = {unique_id: {status,
+        failures, message, run_id, generated_at}}`` plus the probed run ids in
+        ``artifacts["reused_lookback_run_ids"]``.
+        """
+        results = (artifacts.get("run_results") or {}).get("results") or []
+        if run_results_command(artifacts.get("run_results")) not in (None, *EXECUTING_COMMANDS):
+            return  # the normalizer discards non-test run_results anyway
+        pending = {r["unique_id"]: r for r in results
+                   if r.get("unique_id") and str(r.get("status") or "").lower() == REUSED_STATUS}
+        if not pending:
+            return
+
+        anchor_id = anchor.get("id")
+        older = [r for r in runs or []
+                 if r.get("id") is not None and r.get("finished_at") and r.get("id") != anchor_id
+                 and (not isinstance(anchor_id, int) or not isinstance(r.get("id"), int)
+                      or r["id"] < anchor_id)]
+        older.sort(key=lambda r: (str(r.get("finished_at") or ""), r.get("id") or 0), reverse=True)
+
+        carried: dict[str, dict] = {}
+        code_changed: list[str] = []
+        probed: list = []
+        for run in older[: self._reused_lookback_runs]:
+            if not pending:
+                break
+            run_id = run.get("id")
+            probed.append(run_id)
+            try:
+                default = self._client.get_run_artifact(self._account_id, run_id, "run_results.json")
+            except DbtArtifactNotFoundError:
+                default = None
+            except _FATAL_ERRORS:
+                raise
+            except DbtError as exc:
+                errors.append({"source": "dbt", "run_id": run_id, "artifact": "run_results.json",
+                               "resource": "reused_lookback",
+                               "error_type": type(exc).__name__, "error_message": str(exc)})
+                continue
+            doc, _ = self._step_run_results(run, default, errors)
+            if run_results_command(doc) not in EXECUTING_COMMANDS:
+                continue  # docs-only / compile / no run_results: nothing executed here
+            generated_at = ((doc or {}).get("metadata") or {}).get("generated_at")
+            for result in doc.get("results") or []:
+                uid = result.get("unique_id")
+                reused = pending.get(uid)
+                if reused is None:
+                    continue
+                status = str(result.get("status") or "").lower()
+                if not status or status in (REUSED_STATUS, "skipped"):
+                    continue  # not executed in this run either: keep walking back
+                if not _same_code(reused.get("compiled_code"), result.get("compiled_code")):
+                    code_changed.append(uid)
+                    pending.pop(uid)
+                    continue
+                carried[uid] = {
+                    "status": result.get("status"),
+                    "failures": result.get("failures"),
+                    "message": result.get("message"),
+                    "run_id": run_id,
+                    "generated_at": generated_at,
+                }
+                pending.pop(uid)
+
+        artifacts["reused_last_executed"] = carried
+        artifacts["reused_lookback_run_ids"] = probed
+        unresolved = sorted(pending) + sorted(code_changed)
+        if unresolved:
+            errors.append({
+                "source": "dbt", "run_id": anchor_id,
+                "error_type": "ReusedWithoutPriorResult",
+                "count": len(unresolved),
+                "unique_ids": unresolved[:50],
+                "error_message": (
+                    f"{len(unresolved)} node(s) were `reused` by dbt State in run {anchor_id} and "
+                    f"no matching executed result was found in the {len(probed)} earlier run(s) "
+                    f"read ({len(code_changed)} with changed compiled code). Their status is "
+                    f"UNVERIFIED (not passing) in this snapshot."),
+            })
+        logger.info("dbt run %s: %s reused node(s) carried forward from %s earlier run(s); "
+                    "%s unresolved", anchor_id, len(carried), len(probed), len(unresolved))
 
     @staticmethod
     def _safe(fn, errors: list[dict], what: str):
@@ -247,3 +362,10 @@ class DbtExtractor:
             logger.warning("dbt %s fetch failed: %s", what, exc)
             errors.append({"source": "dbt", "resource": what, "error_type": type(exc).__name__, "error_message": str(exc)})
             return None
+
+
+def _same_code(a, b) -> bool:
+    """Whitespace-insensitive compiled_code equality; unknown on either side passes."""
+    if not a or not b:
+        return True
+    return " ".join(str(a).split()) == " ".join(str(b).split())

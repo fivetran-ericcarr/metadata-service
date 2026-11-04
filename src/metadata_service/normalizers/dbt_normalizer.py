@@ -19,13 +19,22 @@ logger = logging.getLogger(__name__)
 TEST_BEARING_COMMANDS = frozenset({"build", "test", "retry"})
 EXECUTING_COMMANDS = TEST_BEARING_COMMANDS | {"run", "seed", "snapshot"}
 
+# dbt State (state-aware orchestration, the default on dbt Fusion) reports a node
+# it did NOT re-execute — code and upstream data unchanged — as ``reused``. The
+# last executed result stands, but this run_results does not say what it was.
+REUSED_STATUS = "reused"
+# Fusion also marks results it carried forward itself (e.g. a still-firing warn
+# test) with this message prefix while keeping the carried status.
+_NOOP_MESSAGE_PREFIX = "NO-OP"
+
 
 def run_results_command(run_results: dict | None) -> str | None:
     """The dbt command that wrote a run_results.json (``args.which``), or None
     when unknown (old dbt versions / hand-built fixtures without ``args``)."""
     if not isinstance(run_results, dict):
         return None
-    which = (run_results.get("args") or {}).get("which")
+    args = run_results.get("args") or {}
+    which = args.get("which") or args.get("command")
     return str(which) if which else None
 
 
@@ -53,7 +62,8 @@ class DbtNormalizer:
             })
             run_results = {}
 
-        run_status = self._index_run_results(run_results)
+        carried = (artifacts.get("reused_last_executed") or {}) if run_results else {}
+        run_status = self._index_run_results(run_results, carried)
         freshness = self._index_freshness(sources_artifact)
         catalog_nodes = (catalog.get("nodes") or {}) if isinstance(catalog, dict) else {}
         catalog_sources = (catalog.get("sources") or {}) if isinstance(catalog, dict) else {}
@@ -153,18 +163,49 @@ class DbtNormalizer:
 
     # -- indexes ----------------------------------------------------------
     @staticmethod
-    def _index_run_results(run_results: dict) -> dict[str, dict]:
+    def _index_run_results(run_results: dict, carried: dict | None = None) -> dict[str, dict]:
+        """unique_id -> effective status, resolving dbt State ``reused`` results.
+
+        A ``reused`` node takes the status/failures of its last executed result
+        (``carried``, found by the extractor in earlier runs), with provenance in
+        ``last_executed_*``. Without one it stays ``reused`` — an UNVERIFIED
+        status that no consumer may read as passing. ``reported_status`` is
+        always what this run's run_results.json said.
+        """
+        carried = carried or {}
         index: dict[str, dict] = {}
         for result in (run_results or {}).get("results", []) or []:
             uid = result.get("unique_id")
             if not uid:
                 continue
-            index[uid] = {
-                "status": result.get("status"),
+            reported = result.get("status")
+            message = result.get("message")
+            entry = {
+                "status": reported,
+                "reported_status": reported,
                 "execution_time": result.get("execution_time"),
                 "failures": result.get("failures"),
-                "message": result.get("message"),
+                "message": message,
+                "reused": False,
+                "last_executed_status": None,
+                "last_executed_run_id": None,
+                "last_executed_at": None,
             }
+            if str(reported or "").lower() == REUSED_STATUS:
+                entry["reused"] = True
+                prior = carried.get(uid)
+                if prior and prior.get("status"):
+                    entry.update(status=prior["status"], failures=prior.get("failures"),
+                                 last_executed_status=prior["status"],
+                                 last_executed_run_id=prior.get("run_id"),
+                                 last_executed_at=prior.get("generated_at"))
+                else:
+                    entry.update(status=REUSED_STATUS, failures=None)
+            elif str(message or "").startswith(_NOOP_MESSAGE_PREFIX):
+                # Fusion carried this status forward itself (status already stands).
+                entry["reused"] = True
+                entry["last_executed_status"] = reported
+            index[uid] = entry
         return index
 
     @staticmethod
@@ -176,8 +217,11 @@ class DbtNormalizer:
                 continue
             timing = result.get("max_loaded_at")
             criteria = result.get("criteria") or {}
+            status = result.get("status")
             index[uid] = {
-                "status": result.get("status"),
+                # dbt Fusion writes "Pass"/"Warn"/...; dbt-core lower-case. One spelling
+                # keeps freshness drift and status checks from flapping on the engine.
+                "status": status.lower() if isinstance(status, str) else status,
                 "max_loaded_at": timing,
                 "snapshotted_at": result.get("snapshotted_at"),
                 "criteria": criteria,
@@ -213,6 +257,7 @@ class DbtNormalizer:
                         "sources": node.get("sources") or [],
                         "tests": [],
                         "latest_status": status.get("status"),
+                        **_reuse_fields(status),
                         "execution_time": status.get("execution_time"),
                         "governance": self._governance(node, config),
                     }
@@ -291,6 +336,7 @@ class DbtNormalizer:
                         "severity": (config.get("severity") or "error"),
                         "tags": node.get("tags") or [],
                         "latest_status": status.get("status"),
+                        **_reuse_fields(status),
                         "failures": status.get("failures"),
                         "execution_time": status.get("execution_time"),
                     }
@@ -320,6 +366,8 @@ class DbtNormalizer:
                     "status": test.get("latest_status"),
                     "severity": test.get("severity"),
                     "failures": test.get("failures"),
+                    "reused": test.get("reused", False),
+                    "last_executed_run_id": test.get("last_executed_run_id"),
                 }
             )
 
@@ -388,6 +436,17 @@ def _build_columns(manifest_columns: dict, catalog_columns: dict) -> list[dict]:
             }
         )
     return out
+
+
+def _reuse_fields(status: dict) -> dict:
+    """dbt State provenance copied onto a model/test record (see _index_run_results)."""
+    return {
+        "reported_status": status.get("reported_status"),
+        "reused": bool(status.get("reused")),
+        "last_executed_status": status.get("last_executed_status"),
+        "last_executed_run_id": status.get("last_executed_run_id"),
+        "last_executed_at": status.get("last_executed_at"),
+    }
 
 
 def _infer_test_type(name: str | None) -> str | None:

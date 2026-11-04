@@ -13,6 +13,7 @@ from ..dq.activation_gate import evaluate_syncs, is_warn_with_failures
 from ..dq.lineage import LineageGraph
 from ..dq.recommendations import activation_risk, recommend_for_object
 from ..dq.status import FAILING_STATUSES as _FAILING_STATUSES
+from ..dq.status import is_unverified_status
 from ..models.common import (
     MATCH_CASE_INSENSITIVE,
     MATCH_CONFIGURED_ALIAS,
@@ -427,6 +428,9 @@ class CombinedNormalizer:
                     if (t.get("status") or "").lower() in _FAILING_STATUSES:
                         failing_uids.add(t.get("unique_id") or id(t))
             failing = len(failing_uids)
+            unverified = len({t.get("unique_id") or id(t)
+                              for o in upstream for t in (o.get("dbt") or {}).get("tests") or []
+                              if is_unverified_status(t.get("status"))})
             risk_levels = {(o.get("dq_summary") or {}).get("risk_level") for o in upstream}
             if "high" in risk_levels or failing > 0:
                 trust = "at_risk"
@@ -442,6 +446,7 @@ class CombinedNormalizer:
                 "upstream_object_count": len(upstream),
                 "upstream_objects": [o.get("object_id") for o in upstream],
                 "failing_tests": failing,
+                "unverified_tests": unverified,
             })
         return out
 
@@ -593,9 +598,15 @@ class CombinedNormalizer:
         freshness = (obj.get("dbt") or {}).get("freshness") or {}
         has_freshness = bool(freshness.get("status")) or bool(freshness.get("configured"))
 
-        failing = warn_failing = 0
+        failing = warn_failing = unverified = reused = 0
         for test in (obj.get("dbt") or {}).get("tests") or []:
-            if (test.get("status") or "").lower() in _FAILING_STATUSES:
+            if test.get("reused"):
+                reused += 1
+            if is_unverified_status(test.get("status")):
+                # dbt State reused it and no executed result was found: unknown,
+                # so the object cannot be rated low-risk on it.
+                unverified += 1
+            elif (test.get("status") or "").lower() in _FAILING_STATUSES:
                 failing += 1
             elif is_warn_with_failures(test):
                 # A warn-severity test that is actually firing: the dbt run stays
@@ -610,7 +621,7 @@ class CombinedNormalizer:
 
         if high_risk or failing > 0:
             risk = "high"
-        elif (warn_failing > 0 or rec_tests > 0 or (has_pk and not has_pk_tests())
+        elif (warn_failing > 0 or unverified > 0 or rec_tests > 0 or (has_pk and not has_pk_tests())
               or obj.get("match_confidence") == MATCH_UNMATCHED):
             risk = "medium"
         else:
@@ -622,6 +633,8 @@ class CombinedNormalizer:
             "has_freshness_check": has_freshness,
             "failing_tests_count": failing,
             "warn_tests_with_failures_count": warn_failing,
+            "reused_tests_count": reused,
+            "unverified_tests_count": unverified,
             "recommended_tests_count": rec_tests,
             "risk_level": risk,
         }

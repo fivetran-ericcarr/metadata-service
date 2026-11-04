@@ -66,7 +66,13 @@ DQ application should consume the **normalized snapshot** (section 2), not these
     "run_results": { "...": "run_results.json" },
     "sources": { "...": "sources.json (freshness)" },
     "artifacts_run_id": 520391059,
-    "run_results_steps": [5]
+    "run_results_steps": [5],
+    "reused_last_executed": {
+      "test.demo.not_null_stg_salesforce__account_id": {
+        "status": "pass", "failures": 0, "message": "Pass",
+        "run_id": 520390001, "generated_at": "2026-11-04T03:06:00Z" }
+    },
+    "reused_lookback_run_ids": [520390001]
   },
   "errors": []
 }
@@ -82,6 +88,36 @@ executing step (`build`, `test`, `retry`, `run`, `seed`, `snapshot`) in step
 order — the latest status per `unique_id` wins. `run_results_steps` records the
 step indices used (absent when the last step was already test-bearing, which
 costs no extra API calls). `manifest`/`catalog`/`sources` stay the last step's.
+
+**dbt Fusion / dbt State.** On dbt v2 (Fusion) the build step still writes
+`args.which == "build"`, so the step logic above is unchanged. Fusion's retired
+docs step (`(Deprecated) Formerly Generation of Docs`) writes no run_results.
+In practice the build step writes `catalog.json` itself. When a run has no
+`catalog.json`, the catalog is just absent: column types come from the
+warehouse `INFORMATION_SCHEMA` read (`data_type_source`), or stay `null`.
+
+With dbt State (state-aware orchestration) a node whose code and upstream data
+are unchanged is **not re-executed** and reports `status: "reused"` (message
+`NO-OP - No new changes on any upstreams`). The last executed result stands, but
+this run's file does not say what it was. So when the chosen run has
+`reused` results, the extractor walks earlier finished runs of the same scope
+(newest first, at most `DBT_REUSED_LOOKBACK_RUNS`, default 10, using the same
+step-aware selection). For each reused node it takes the first result there
+that actually executed (not `reused`/`skipped`), and only if its
+`compiled_code` matches (whitespace-insensitive). A different compiled SQL
+means a different code version, so that result does not stand.
+`reused_last_executed` holds what was found. `reused_lookback_run_ids` holds the
+runs read. Nodes left unresolved (lookback exhausted, or the code changed) get a
+`ReusedWithoutPriorResult` error and stay **unverified** (section 2.2).
+Fusion also carries some results forward itself: a still-firing warn test comes
+back as `status: "warn"` with the `NO-OP` message and its last `failures`. That
+status is used as-is and flagged `reused: true`.
+
+Limitation: dbt State is environment-wide, so another job in the same
+environment may have executed a node more recently than any run in this
+extraction's scope. The `compiled_code` check stops a stale-code result from
+being carried. A same-code result from an older run in scope is still used, and
+`last_executed_run_id` says which run it came from.
 
 `errors[]` entries (both extracts) carry enough context to locate the failure
 without aborting the run, e.g.:
@@ -120,11 +156,11 @@ The primary artifact. Top-level shape:
 | `sources.dbt` | object | Normalized dbt metadata (section 2.2) |
 | `warehouse_objects` | array | Joined Fivetran + dbt objects (section 2.3) |
 | `dq_recommendations` | array | DQ recommendations / risks / signals (section 2.4) |
-| `metric_quality` | array | Per-metric Semantic Layer trust rollup (`{metric, trust_level, upstream_objects, failing_tests}`) |
+| `metric_quality` | array | Per-metric Semantic Layer trust rollup (`{metric, trust_level, upstream_objects, failing_tests, unverified_tests}`); unverified tests make an upstream object `medium` risk, so the metric is at best `watch` |
 | `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
-| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, pk_enrichment, column_schema_enrichment}`. `pk_enrichment` and `column_schema_enrichment` each report `not_requested`/`unavailable`/`ran`/`failed` **independently** — the Platform Connector's `fivetran_metadata` schema and the destination's `INFORMATION_SCHEMA` are different objects, commonly accessible to a role one at a time (e.g. `INFORMATION_SCHEMA` works the moment the credential is granted; `fivetran_metadata` only exists once the Fivetran Platform Connector itself has been added and synced), so one failing must not suppress a read that would otherwise have succeeded. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
+| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, fivetran_fixtures, pk_enrichment, column_schema_enrichment}`. `fixtures` is a fully offline build; `fivetran_fixtures` means only the Fivetran payload came from fixtures (`--fivetran-fixtures-dir`) while dbt, Activations and warehouse enrichment ran live. `pk_enrichment` and `column_schema_enrichment` each report `not_requested`/`unavailable`/`ran`/`failed` **independently** — the Platform Connector's `fivetran_metadata` schema and the destination's `INFORMATION_SCHEMA` are different objects, commonly accessible to a role one at a time (e.g. `INFORMATION_SCHEMA` works the moment the credential is granted; `fivetran_metadata` only exists once the Fivetran Platform Connector itself has been added and synced), so one failing must not suppress a read that would otherwise have succeeded. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
 
 ### 2.1 `sources.fivetran`
 
@@ -194,6 +230,10 @@ overridden by `WAREHOUSE_PORT`.
                 "description": "...", "columns": [...], "tags": [...],
                 "depends_on": ["source.demo.salesforce.account"],
                 "tests": [...], "latest_status": "success",
+                "reported_status": "reused", "reused": true,
+                "last_executed_status": "success",
+                "last_executed_run_id": 520390001,
+                "last_executed_at": "2026-11-04T03:06:00Z",
                 "execution_time": 1.23 } ],
   "sources": [ { "unique_id": "source.demo.salesforce.account",
                  "source_name": "salesforce", "table_name": "account",
@@ -216,6 +256,26 @@ overridden by `WAREHOUSE_PORT`.
 
 `edge_type` is one of `source->model`, `model->model`, or `model->exposure`.
 Tests are also attached (as compact summaries) to their owning model/source.
+They carry `status`, `failures`, `reused` and `last_executed_run_id`.
+
+**`reused` (dbt State) semantics.** Every model and test record has these fields:
+
+| Field | Meaning |
+|---|---|
+| `latest_status` | The **effective** status: what the run reported, or, for a `reused` node, the status of its last execution. A reused node with no last execution found keeps `"reused"`, which means **unverified**. |
+| `reported_status` | What this run's `run_results.json` literally said (`"reused"`, `"warn"`, ...). |
+| `reused` | `true` when the run did not re-execute the node. That covers `status: reused`, and also Fusion results carried forward with a `NO-OP` message. |
+| `last_executed_status` / `last_executed_run_id` / `last_executed_at` | Where the effective status came from. `run_id` is `null` when Fusion itself carried the status forward. |
+
+`failures` follows the effective status: the carried run's count, not the `0`
+placeholder Fusion writes on reused rows. An **unverified** `reused` result
+(`latest_status == "reused"`) is evidence of nothing. It is not passing and not
+failing. The dq_summary counts it in `unverified_tests_count`, an object with
+any unverified test is never `low` risk, and the activation gate never `allow`s
+on it (section 2.7).
+
+Freshness statuses are lower-cased: dbt Fusion writes `Pass`/`Warn`/`Error`
+where dbt-core writes `pass`/`warn`/`error`.
 
 ### 2.3 `warehouse_objects[]`
 
@@ -275,6 +335,8 @@ downstream models.
     "has_freshness_check": true,
     "failing_tests_count": 1,
     "warn_tests_with_failures_count": 0,
+    "reused_tests_count": 0,
+    "unverified_tests_count": 0,
     "recommended_tests_count": 1,
     "risk_level": "high"
   }
@@ -305,7 +367,9 @@ downstream models.
 | `match_confidence` | `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched`. (`exact_relation` is reserved for a future database-qualified match tier and is not currently produced.) |
 | `dq_summary.failing_tests_count` | Tests with status `fail`/`error`/`runtime error`, **plus** a failing source-freshness check (the dbt run is red or the source is stale past its freshness policy) |
 | `dq_summary.warn_tests_with_failures_count` | Warn-severity tests that are **firing** (failing rows while the run stays green) — the reverse-ETL trap; triage-visible, and the activation gate blocks on it |
-| `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if warn tests are firing, recommendations exist, PK tests are missing, or unmatched) |
+| `dq_summary.reused_tests_count` | Tests the latest run did not re-execute (dbt State `reused`); their status is carried forward where known |
+| `dq_summary.unverified_tests_count` | Reused tests whose last executed result could not be found (`status == "reused"`): unknown, not passing |
+| `dq_summary.risk_level` | `low`, `medium`, or `high` (high if failing tests or a high-severity risk; medium if warn tests are firing, tests are unverified, recommendations exist, PK tests are missing, or unmatched) |
 
 **Primary key detection.** Fivetran's config API does not return an
 `is_primary_key` field for most connectors. Key columns are instead locked from
@@ -529,6 +593,11 @@ written by a non-executing command (`args.which` such as `generate`, `compile`,
 `run-operation`). It is ignored rather than read as passing: every model's and
 test's `latest_status` is `null` (**unknown**, not passing) in that snapshot.
 
+`ReusedWithoutPriorResult` (dbt) lists nodes (`count`, first 50 `unique_ids`)
+that dbt State reported `reused` but for which no executed result with matching
+compiled code was found in the lookback runs. Their `latest_status` stays
+`"reused"` (**unverified**).
+
 ### 2.7 `activations`
 
 Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
@@ -554,7 +623,7 @@ Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
         "verdict": "block",
         "source_node_unique_id": "model.github_dq.customer_churn",
         "reasons": [ { "code": "upstream_warn_test_failures", "severity": "high", "message": "…" } ],
-        "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "tests_seen": 18, "tests_with_results": 18, "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
+        "upstream": { "node_count": 9, "failing_tests": 0, "warn_tests_with_failures": 1, "tests_seen": 18, "tests_with_results": 18, "unverified_reused": 0, "stale_objects": 0, "missing_contract": false, "unmatched_upstream": 0 }
       }
     }
   ]
@@ -564,12 +633,14 @@ Fivetran Activations (reverse ETL) syncs and their **readiness verdict** — the
 | `readiness.verdict` | Meaning |
 |---|---|
 | `allow` | Positive evidence only: upstream tests exist, ran, and passed; no stale syncs or governance gaps. |
-| `warn` | Source model has no enforced contract, an upstream source is unmatched, **or the gate lacks evidence** — no upstream tests exist (`no_upstream_tests`), tests have no run results (`no_test_results`), or Fivetran coverage data is absent from the build (`coverage_checks_skipped`). Absence of evidence never yields `allow`. |
+| `warn` | Source model has no enforced contract, an upstream source is unmatched, **or the gate lacks evidence** — no upstream tests exist (`no_upstream_tests`), tests have no run results (`no_test_results`), an upstream test/model was reused by dbt State with no executed result found (`reused_without_prior_result`), or Fivetran coverage data is absent from the build (`coverage_checks_skipped`). Absence of evidence never yields `allow`. |
 | `block` | Upstream failing test, a **warn-severity test with failures > 0** (or warn status with the count missing), failing source freshness, or a stale upstream Fivetran sync — do not push. |
 | `unknown` | Sync source object is not matched to a dbt model/source (no lineage to assess). Also raises an `activates_unverified_data` (medium) risk in `dq_recommendations` when the source object is named. |
 
 `readiness.upstream` also reports the evidence base: `tests_seen` (tests defined
-upstream) and `tests_with_results` (those with a run result).
+upstream), `tests_with_results` (those with a run result; a carried-forward
+`reused` result counts, an unverified one does not) and `unverified_reused`
+(upstream tests/models still `reused` with no executed result).
 
 Each warehouse object the sync consumes also carries a compact
 `warehouse_objects[].activations[]` back-reference (`sync_id`, `label`,

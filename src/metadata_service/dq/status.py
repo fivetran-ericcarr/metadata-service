@@ -12,5 +12,21 @@ from __future__ import annotations
 FAILING_STATUSES = frozenset({"fail", "error", "runtime error"})
 
 
+# A dbt State ``reused`` result whose last executed status could not be found
+# (see DbtNormalizer._index_run_results). It is evidence of NOTHING: not passing,
+# not failing — consumers must treat it like a missing result, and the activation
+# gate must never clear on it.
+UNVERIFIED_STATUSES = frozenset({"reused"})
+
+
 def is_failing_status(status) -> bool:
     return (status or "").lower() in FAILING_STATUSES
+
+
+def is_unverified_status(status) -> bool:
+    return (status or "").lower() in UNVERIFIED_STATUSES
+
+
+def has_result(status) -> bool:
+    """True when a status is real evidence (an executed or carried-forward result)."""
+    return status is not None and not is_unverified_status(status)

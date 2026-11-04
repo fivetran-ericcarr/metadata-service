@@ -101,6 +101,13 @@ def build(
     fixtures_dir: str | None = typer.Option(
         None, "--fixtures-dir", help="Build from local JSON fixtures instead of live APIs (offline)."
     ),
+    fivetran_fixtures_dir: str | None = typer.Option(
+        None, "--fivetran-fixtures-dir",
+        help="Load ONLY the Fivetran payload (fivetran_*.json) from this directory; dbt, "
+             "Activations and warehouse enrichment stay live. For warehouse tables no "
+             "Fivetran connection in this account reports (e.g. a seeded demo). "
+             "Mutually exclusive with --fixtures-dir.",
+    ),
     include_fivetran: bool = typer.Option(True, "--include-fivetran/--no-fivetran"),
     include_dbt: bool = typer.Option(True, "--include-dbt/--no-dbt"),
     include_activations: bool = typer.Option(
@@ -133,9 +140,18 @@ def build(
     ),
 ) -> None:
     """Run full extraction + normalization and write a snapshot (latest.json)."""
+    if fixtures_dir and fivetran_fixtures_dir:
+        typer.echo("error: --fixtures-dir and --fivetran-fixtures-dir are mutually exclusive "
+                   "(--fixtures-dir already loads Fivetran from fixtures).", err=True)
+        raise typer.Exit(code=2)
+    if fivetran_fixtures_dir and not include_fivetran:
+        typer.echo("error: --fivetran-fixtures-dir conflicts with --no-fivetran.", err=True)
+        raise typer.Exit(code=2)
     settings = get_settings()
     aliases = json.loads(Path(aliases_file).read_text(encoding="utf-8")) if aliases_file else None
     if write_latest is None:
+        # A mixed build carries live dbt/warehouse data and is meant to be served,
+        # so it persists by default; only the fully offline mode is a dry run.
         write_latest = not fixtures_dir
     result = build_and_store(
         settings,
@@ -144,6 +160,7 @@ def build(
         include_dbt=include_dbt,
         include_activations=include_activations,
         fixtures_dir=fixtures_dir,
+        fivetran_fixtures_dir=fivetran_fixtures_dir,
         connected_only=connected_only,
         skip_paused=skip_paused,
         dbt_project_id=dbt_project_id,

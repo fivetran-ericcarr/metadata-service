@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     dbt_service_token: str | None = Field(default=None, alias="DBT_SERVICE_TOKEN")
     dbt_base_url: str = Field(default="https://cloud.getdbt.com/api", alias="DBT_BASE_URL")
     dbt_metadata_api_url: str | None = Field(default=None, alias="DBT_METADATA_API_URL")
+    # dbt State (state-aware orchestration, dbt Fusion): nodes a run did not
+    # re-execute report status ``reused``. Their last executed result is looked up
+    # in up to this many earlier runs of the same scope; 0 disables the lookup
+    # (reused nodes then stay unverified and the activation gate warns).
+    dbt_reused_lookback_runs: int = Field(default=10, alias="DBT_REUSED_LOOKBACK_RUNS")
 
     # --- Storage ----------------------------------------------------------
     metadata_storage_backend: str = Field(default="local", alias="METADATA_STORAGE_BACKEND")

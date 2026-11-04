@@ -16,7 +16,9 @@ Policy (deterministic, fail-closed):
   warn   — the source model has no enforced contract, OR an upstream object is
            unmatched to dbt (a coverage blind spot on data headed to prod), OR
            the gate lacks evidence: no upstream tests exist, tests exist but have
-           no run results, or Fivetran coverage data is absent from the build.
+           no run results, an upstream test/model was ``reused`` by dbt State with
+           no executed result found (unverified), or Fivetran coverage data is
+           absent from the build.
            Absence of evidence is never treated as "allow".
   allow  — upstream tests exist, ran, and are clean; no stale syncs or gaps.
   unknown— the sync's source object could not be matched to a dbt model/source
@@ -27,7 +29,7 @@ Policy (deterministic, fail-closed):
 from __future__ import annotations
 
 from .lineage import LineageGraph
-from .status import FAILING_STATUSES, is_failing_status
+from .status import FAILING_STATUSES, has_result, is_failing_status, is_unverified_status
 
 
 def _is_failing(test: dict) -> bool:
@@ -143,7 +145,7 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
                            "unverified data if the source is in scope.",
             }],
             "upstream": {"node_count": 0, "failing_tests": 0, "warn_tests_with_failures": 0,
-                         "tests_seen": 0, "tests_with_results": 0,
+                         "tests_seen": 0, "tests_with_results": 0, "unverified_reused": 0,
                          "stale_objects": 0, "missing_contract": False, "unmatched_upstream": 0},
         }
 
@@ -158,13 +160,16 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
     reasons: list[dict] = []
     failing = warn_failing = stale = unmatched = 0
     tests_seen = tests_with_results = 0
+    unverified: list[str] = []
     failing_detail: list[dict] = []
 
     def _tally(test: dict) -> None:
         nonlocal tests_seen, tests_with_results
         tests_seen += 1
-        if test.get("status") is not None:
+        if has_result(test.get("status")):
             tests_with_results += 1
+        elif is_unverified_status(test.get("status")):
+            unverified.append(test.get("unique_id") or test.get("name"))
 
     for uid in upstream_models:
         model = models_by_uid.get(uid) or {}
@@ -178,6 +183,8 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
                 warn_failing += 1
                 failing_detail.append({"node": uid, "test": test.get("name"),
                                        "status": "warn", "failures": test.get("failures")})
+        if is_unverified_status(model.get("latest_status")):
+            unverified.append(uid)
         if uid in stale_models:
             stale += 1
 
@@ -218,6 +225,16 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
                         "message": f"{tests_seen} upstream test(s) are defined but none have a "
                                    "run result (run_results.json missing or stale); the tests "
                                    "may be failing without the gate seeing it."})
+    if unverified:
+        # Some evidence exists, but part of the upstream DAG was reused by dbt State
+        # with no executed result found: its last outcome is unknown, so it cannot
+        # count toward "allow" (fail closed, like a missing result).
+        no_evidence = True
+        reasons.append({"code": "reused_without_prior_result", "severity": "medium",
+                        "message": f"{len(unverified)} upstream dbt node(s)/test(s) were reused "
+                                   "by dbt State and no executed result was found in earlier "
+                                   "runs; their status is unverified.",
+                        "detail": sorted(str(u) for u in unverified)[:50]})
     if not has_coverage_data:
         no_evidence = True
         reasons.append({"code": "coverage_checks_skipped", "severity": "medium",
@@ -267,6 +284,7 @@ def _evaluate_one(sync, model_lookup, source_lookup, models_by_uid, sources_by_u
             "warn_tests_with_failures": warn_failing,
             "tests_seen": tests_seen,
             "tests_with_results": tests_with_results,
+            "unverified_reused": len(unverified),
             "stale_objects": stale,
             "missing_contract": missing_contract,
             "unmatched_upstream": unmatched,

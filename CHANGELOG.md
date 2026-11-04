@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (dbt Fusion + dbt State: `reused` results read as evidence)
+- With dbt State (state-aware orchestration, the default on dbt v2 / Fusion), a
+  run after a 0-row sync re-executes nothing: unchanged nodes report
+  `status: "reused"`. The DQ layer used to count `reused` as a test result. It
+  was not failing, so the activation gate could `allow` on tests whose last
+  outcome it never saw. Observed live on dbt Cloud job 1149491: 492 `reused`,
+  36 `warn`, 1 `pass`.
+- The extractor now carries each reused node's **last executed result**
+  forward. It walks earlier finished runs of the same scope (newest first, up to
+  `DBT_REUSED_LOOKBACK_RUNS`, default 10, step-aware like the build-step
+  selection). A result is taken only when its `compiled_code` matches. The
+  results land in raw `artifacts.reused_last_executed`, and the runs read in
+  `reused_lookback_run_ids`. A run with no `reused` results costs no extra
+  calls.
+- Normalized models and tests gain `reported_status`, `reused`,
+  `last_executed_status`, `last_executed_run_id` and `last_executed_at`.
+  `latest_status` and `failures` are the effective (carried) values. A reused
+  node with no executed result found keeps `latest_status: "reused"`, which
+  means **unverified**, and gets a `ReusedWithoutPriorResult` error.
+- Fail-closed handling of unverified results. The activation gate no longer
+  counts them as results and warns with `reused_without_prior_result`
+  (`upstream.unverified_reused`). `dq_summary` gains `reused_tests_count` and
+  `unverified_tests_count`, and an object with an unverified test is never
+  `low` risk. `metric_quality` gains `unverified_tests`.
+- Fusion source freshness statuses (`Pass`/`Warn`/`Error`) are lower-cased to
+  match dbt-core, so freshness drift no longer flips on the engine change.
+- `run_results_command` falls back to `args.command` when `args.which` is
+  absent.
+- Verified on Fusion 2.0.11: the build step still reports `args.which ==
+  "build"`. The retired docs step (`(Deprecated) Formerly Generation of Docs`)
+  writes no run_results, and `catalog.json` is still served from the build
+  step. A run without a catalog falls back to warehouse `INFORMATION_SCHEMA`
+  types (covered by tests).
+
 ### Fixed (dbt Cloud multi-step runs reported warning/failing tests as passing)
 - dbt Cloud's artifacts endpoint returns each artifact as of the run's LAST
   step. For a job like `dbt deps` -> `dbt source freshness` -> `dbt build` ->
@@ -28,6 +62,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than passing.
 - `DbtClient.get_run_artifact` gains `step=`; `DbtClient.get_run` gains
   `include_related=`.
+
+### Added (mixed fixture/live builds)
+- `build --fivetran-fixtures-dir <dir>` (and `fivetran_fixtures_dir=` on
+  `build_metadata`/`build_and_store`) loads ONLY the Fivetran payload from
+  fixture files while dbt, Activations and warehouse enrichment run live.
+  Previously `--fixtures-dir` was all-or-nothing: it replaced every source and
+  also skipped warehouse enrichment, so there was no way to pair simulated
+  Fivetran connection metadata (for warehouse tables no Fivetran connection in
+  the account reports, e.g. a seeded demo) with real dbt Cloud artifacts and a
+  real `INFORMATION_SCHEMA` read. The fixture's `fivetran_destination.json`
+  supplies the destination the reader connects to.
+- A missing `fivetran_connections.json` in that directory is an error, not an
+  empty Fivetran section — a typo'd path must not build a live-dbt snapshot with
+  zero Fivetran objects. `--fixtures-dir` and `--fivetran-fixtures-dir` are
+  mutually exclusive, as are `--fivetran-fixtures-dir` and `--no-fivetran`.
+- Mixed builds persist `latest.json` by default (they carry live data and are
+  meant to be served); only the fully offline `--fixtures-dir` build stays a
+  dry run by default.
+- `build_scope.fivetran_fixtures` records the mode, so a mixed build is never
+  drift-compared like-for-like against a live-Fivetran build. Being a new key,
+  the first build after upgrading reports a single `comparison_skipped` drift
+  marker against an older snapshot.
 
 ### Fixed (warehouse enrichment fault isolation)
 - A PK-read failure (`read_primary_keys`, against the Fivetran Platform
