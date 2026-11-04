@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (dbt Fusion + dbt State: `reused` results read as evidence)
+- With dbt State (state-aware orchestration, the default on dbt v2 / Fusion), a
+  run after a 0-row sync re-executes nothing: unchanged nodes report
+  `status: "reused"`. The DQ layer used to count `reused` as a test result. It
+  was not failing, so the activation gate could `allow` on tests whose last
+  outcome it never saw. Observed live on dbt Cloud job 1149491: 492 `reused`,
+  36 `warn`, 1 `pass`.
+- The extractor now carries each reused node's **last executed result**
+  forward. It walks earlier finished runs of the same scope (newest first, up to
+  `DBT_REUSED_LOOKBACK_RUNS`, default 10, step-aware like the build-step
+  selection). A result is taken only when its `compiled_code` matches. The
+  results land in raw `artifacts.reused_last_executed`, and the runs read in
+  `reused_lookback_run_ids`. A run with no `reused` results costs no extra
+  calls.
+- Normalized models and tests gain `reported_status`, `reused`,
+  `last_executed_status`, `last_executed_run_id` and `last_executed_at`.
+  `latest_status` and `failures` are the effective (carried) values. A reused
+  node with no executed result found keeps `latest_status: "reused"`, which
+  means **unverified**, and gets a `ReusedWithoutPriorResult` error.
+- Fail-closed handling of unverified results. The activation gate no longer
+  counts them as results and warns with `reused_without_prior_result`
+  (`upstream.unverified_reused`). `dq_summary` gains `reused_tests_count` and
+  `unverified_tests_count`, and an object with an unverified test is never
+  `low` risk. `metric_quality` gains `unverified_tests`.
+- Fusion source freshness statuses (`Pass`/`Warn`/`Error`) are lower-cased to
+  match dbt-core, so freshness drift no longer flips on the engine change.
+- `run_results_command` falls back to `args.command` when `args.which` is
+  absent.
+- Verified on Fusion 2.0.11: the build step still reports `args.which ==
+  "build"`. The retired docs step (`(Deprecated) Formerly Generation of Docs`)
+  writes no run_results, and `catalog.json` is still served from the build
+  step. A run without a catalog falls back to warehouse `INFORMATION_SCHEMA`
+  types (covered by tests).
+
 ### Fixed (dbt Cloud multi-step runs reported warning/failing tests as passing)
 - dbt Cloud's artifacts endpoint returns each artifact as of the run's LAST
   step. For a job like `dbt deps` -> `dbt source freshness` -> `dbt build` ->

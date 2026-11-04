@@ -1,0 +1,373 @@
+{
+ "_comment": "Mirrors dbt Cloud job 1149491 on dbt Fusion 2.0.11 with dbt State (Production env 'fusion-stable', enable_dbt_state). Run 300 (anchor) is a Fivetran-triggered run after a 0-row sync: unchanged nodes are 'reused' (NO-OP), still-firing warns are carried forward by Fusion as 'warn' with a NO-OP message. Run 200 executed everything on Fusion except TU (reused there too). Run 100 is an older dbt-core run ending in docs generate whose build step (5) is the last execution of TU. TD's compiled code changed between 200 and 300. Step 6 on Fusion writes no run_results (404). 'run_results' maps run id -> step index (or 'default') -> run_results.json.",
+ "runs": [
+  {
+   "id": 300,
+   "status": 10,
+   "status_humanized": "Success",
+   "finished_at": "2026-11-04T03:11:42Z",
+   "run_steps": [
+    {
+     "index": 1,
+     "name": "Clone git repository"
+    },
+    {
+     "index": 2,
+     "name": "Create profile from connection guidewire_dq_demo_snowflake"
+    },
+    {
+     "index": 3,
+     "name": "Invoke dbt with `dbt deps`"
+    },
+    {
+     "index": 4,
+     "name": "Invoke dbt with `dbt source freshness`"
+    },
+    {
+     "index": 5,
+     "name": "Invoke dbt with `dbt build`"
+    },
+    {
+     "index": 6,
+     "name": "(Deprecated) Formerly Generation of Docs"
+    }
+   ]
+  },
+  {
+   "id": 200,
+   "status": 10,
+   "status_humanized": "Success",
+   "finished_at": "2026-11-04T03:06:17Z",
+   "run_steps": [
+    {
+     "index": 1,
+     "name": "Clone git repository"
+    },
+    {
+     "index": 2,
+     "name": "Create profile from connection guidewire_dq_demo_snowflake"
+    },
+    {
+     "index": 3,
+     "name": "Invoke dbt with `dbt deps`"
+    },
+    {
+     "index": 4,
+     "name": "Invoke dbt with `dbt source freshness`"
+    },
+    {
+     "index": 5,
+     "name": "Invoke dbt with `dbt build`"
+    },
+    {
+     "index": 6,
+     "name": "(Deprecated) Formerly Generation of Docs"
+    }
+   ]
+  },
+  {
+   "id": 100,
+   "status": 10,
+   "status_humanized": "Success",
+   "finished_at": "2026-10-19T18:50:00Z",
+   "run_steps": [
+    {
+     "index": 5,
+     "name": "Invoke dbt with `dbt build`"
+    },
+    {
+     "index": 6,
+     "name": "Invoke dbt with `Generation of docs`"
+    }
+   ]
+  }
+ ],
+ "run_results": {
+  "300": {
+   "default": {
+    "metadata": {
+     "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+     "dbt_version": "2.0.11",
+     "generated_at": "2026-11-04T03:11:18Z",
+     "invocation_id": "inv-300"
+    },
+    "args": {
+     "command": "build",
+     "which": "build",
+     "full_refresh": false
+    },
+    "elapsed_time": 10.0,
+    "results": [
+     {
+      "unique_id": "model.demo.stg_salesforce__account",
+      "status": "reused",
+      "message": "No new changes on any upstreams",
+      "failures": null,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select * from raw.account",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "model.demo.dim_account",
+      "status": "reused",
+      "message": "No new changes on any upstreams",
+      "failures": null,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select * from stg",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+      "status": "reused",
+      "message": "NO-OP - No new changes on any upstreams",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select id from stg where id is null",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.unique_stg_salesforce__account_id",
+      "status": "reused",
+      "message": "NO-OP - No new changes on any upstreams",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select id from stg group by id having count(*) > 1",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+      "status": "warn",
+      "message": "NO-OP - No new changes on any upstreams",
+      "failures": 20,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select status from stg where status not in ('a','b')",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.not_null_dim_account_account_id",
+      "status": "reused",
+      "message": "NO-OP - No new changes on any upstreams",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select account_id from dim where account_id is null and 1=1",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     }
+    ]
+   },
+   "5": "default"
+  },
+  "200": {
+   "default": {
+    "metadata": {
+     "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+     "dbt_version": "2.0.11",
+     "generated_at": "2026-11-04T03:06:00Z",
+     "invocation_id": "inv-200"
+    },
+    "args": {
+     "command": "build",
+     "which": "build",
+     "full_refresh": false
+    },
+    "elapsed_time": 10.0,
+    "results": [
+     {
+      "unique_id": "model.demo.stg_salesforce__account",
+      "status": "success",
+      "message": "Succeeded",
+      "failures": null,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select * from raw.account",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "model.demo.dim_account",
+      "status": "success",
+      "message": "Succeeded",
+      "failures": null,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select * from stg",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+      "status": "pass",
+      "message": "Pass",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select id from stg where id is null",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.unique_stg_salesforce__account_id",
+      "status": "reused",
+      "message": "NO-OP - No new changes on any upstreams",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select id from stg group by id having count(*) > 1",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+      "status": "warn",
+      "message": "Warn",
+      "failures": 20,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select status from stg where status not in ('a','b')",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     },
+     {
+      "unique_id": "test.demo.not_null_dim_account_account_id",
+      "status": "pass",
+      "message": "Pass",
+      "failures": 0,
+      "execution_time": 0.2,
+      "adapter_response": {},
+      "compiled_code": "select account_id from dim where account_id is null",
+      "timing": [],
+      "thread_id": "Thread-1 (worker)",
+      "relation_name": null,
+      "batch_results": null
+     }
+    ]
+   },
+   "5": "default"
+  },
+  "100": {
+   "default": {
+    "metadata": {
+     "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+     "dbt_version": "1.10.0",
+     "generated_at": "2026-10-19T18:49:00Z",
+     "invocation_id": "inv-100-docs"
+    },
+    "args": {
+     "command": "generate",
+     "which": "generate",
+     "full_refresh": false
+    },
+    "elapsed_time": 10.0,
+    "results": [
+     {
+      "unique_id": "model.demo.stg_salesforce__account",
+      "status": "success",
+      "message": null,
+      "failures": null
+     },
+     {
+      "unique_id": "model.demo.dim_account",
+      "status": "success",
+      "message": null,
+      "failures": null
+     },
+     {
+      "unique_id": "test.demo.not_null_stg_salesforce__account_id",
+      "status": "success",
+      "message": null,
+      "failures": null
+     },
+     {
+      "unique_id": "test.demo.unique_stg_salesforce__account_id",
+      "status": "success",
+      "message": null,
+      "failures": null
+     },
+     {
+      "unique_id": "test.demo.accepted_values_stg_salesforce__account_status",
+      "status": "success",
+      "message": null,
+      "failures": null
+     },
+     {
+      "unique_id": "test.demo.not_null_dim_account_account_id",
+      "status": "success",
+      "message": null,
+      "failures": null
+     }
+    ]
+   },
+   "5": {
+    "metadata": {
+     "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+     "dbt_version": "1.10.0",
+     "generated_at": "2026-10-19T18:48:00Z",
+     "invocation_id": "inv-100-build"
+    },
+    "args": {
+     "command": "build",
+     "which": "build",
+     "full_refresh": false
+    },
+    "elapsed_time": 10.0,
+    "results": [
+     {
+      "unique_id": "test.demo.unique_stg_salesforce__account_id",
+      "status": "warn",
+      "message": "Got 3 results",
+      "failures": 3,
+      "compiled_code": "select id from stg\n  group by id having count(*) > 1"
+     }
+    ]
+   }
+  }
+ },
+ "sources": {
+  "metadata": {
+   "dbt_version": "2.0.11",
+   "invocation_id": "inv-300-freshness"
+  },
+  "results": [
+   {
+    "unique_id": "source.demo.salesforce.account",
+    "status": "Pass",
+    "max_loaded_at": "2026-11-04T03:00:00Z",
+    "snapshotted_at": "2026-11-04T03:10:31Z",
+    "criteria": {}
+   }
+  ]
+ }
+}

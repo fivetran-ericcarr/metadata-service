@@ -130,6 +130,7 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `DBT_SERVICE_TOKEN` | dbt Cloud service token | — |
 | `DBT_BASE_URL` | dbt Cloud API base | `https://cloud.getdbt.com/api` |
 | `DBT_METADATA_API_URL` | Discovery/Metadata GraphQL URL (optional) | — |
+| `DBT_REUSED_LOOKBACK_RUNS` | Earlier runs read to find the last executed result of dbt State `reused` nodes (`0` disables) | `10` |
 | `METADATA_STORAGE_BACKEND` | `local` or `s3` | `local` |
 | `METADATA_LOCAL_PATH` | Local snapshot dir | `./metadata_snapshots` |
 | `METADATA_S3_BUCKET` / `METADATA_S3_PREFIX` | S3 target | — / `metadata` |
@@ -346,6 +347,14 @@ that Protocol and wiring it into `get_storage`.
   from the run's build/test step(s) via the artifacts `?step=` parameter; if a
   run has no executing step at all, statuses are reported as unknown (with a
   `NonTestRunResults` error) — never as compile `success`.
+- dbt Fusion with dbt State reports nodes it did not re-execute as `reused`.
+  Each one takes the status of its last execution, found in up to
+  `DBT_REUSED_LOOKBACK_RUNS` earlier runs with the same compiled code
+  (`last_executed_run_id` records where). A reused node with no such execution
+  stays `reused`, which means **unverified**: it is never read as passing, and
+  the activation gate warns (`reused_without_prior_result`) instead of allowing.
+  A run with no `catalog.json` takes column types from the warehouse
+  `INFORMATION_SCHEMA` read.
 - Relationship and accepted-values recommendations are heuristic and labeled as
   such; they are suggestions, not assertions.
 

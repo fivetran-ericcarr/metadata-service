@@ -410,9 +410,10 @@ def _extract_activations(settings: Settings) -> dict:
 def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: int | None = None) -> dict:
     settings.require_dbt()
     with DbtClient(settings) as client:
-        return DbtExtractor(client, settings.dbt_account_id or "").extract(
-            project_id=project_id, job_id=job_id
-        )
+        return DbtExtractor(
+            client, settings.dbt_account_id or "",
+            reused_lookback_runs=settings.dbt_reused_lookback_runs,
+        ).extract(project_id=project_id, job_id=job_id)
 
 
 def _empty_fivetran() -> dict:
