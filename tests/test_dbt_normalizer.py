@@ -105,3 +105,34 @@ def test_defensive_parsing_tolerates_missing_artifacts():
     assert out["sources"] == []
     assert out["tests"] == []
     assert out["lineage_edges"] == []
+
+
+def test_relationships_test_without_attached_node_attaches_to_tested_node():
+    """dbt v2 manifests can omit ``attached_node``. A relationships test depends on both
+    the tested node and its ``to`` target, and ``depends_on`` is sorted, so the first
+    dependency can be the target (``seed.`` sorts before ``source.``, ``model.a`` before
+    ``model.b``). The test must attach to the node named in its ``model`` argument."""
+    from metadata_service.normalizers.dbt_normalizer import DbtNormalizer
+
+    def rel_test(uid, deps, model_arg, column):
+        return {uid: {"resource_type": "test", "name": uid.split(".")[2], "column_name": column,
+                      "depends_on": {"nodes": deps},
+                      "test_metadata": {"name": "relationships",
+                                        "kwargs": {"model": model_arg, "column_name": column, "field": "id"}}}}
+
+    nodes = {
+        "model.d.a_ref_target": {"resource_type": "model", "name": "a_ref_target"},
+        "model.d.b_tested": {"resource_type": "model", "name": "b_tested"},
+        "seed.d.known_snapshots": {"resource_type": "seed", "name": "known_snapshots"},
+    }
+    nodes.update(rel_test("test.d.rel_source_snapshot", ["seed.d.known_snapshots", "source.d.crm.opportunity"],
+                          "{{ get_where_subquery(source('crm', 'opportunity')) }}", "snapshot_id"))
+    nodes.update(rel_test("test.d.rel_model_parent", ["model.d.a_ref_target", "model.d.b_tested"],
+                          "{{ get_where_subquery(ref('b_tested')) }}", "parent_id"))
+    out = DbtNormalizer().normalize({"artifacts": {"manifest": {
+        "nodes": nodes,
+        "sources": {"source.d.crm.opportunity": {"resource_type": "source", "name": "opportunity", "source_name": "crm"}},
+    }}})
+    tests = _by_uid(out["tests"])
+    assert tests["test.d.rel_source_snapshot"]["attached_node"] == "source.d.crm.opportunity"
+    assert tests["test.d.rel_model_parent"]["attached_node"] == "model.d.b_tested"
