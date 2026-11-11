@@ -1,0 +1,10 @@
+.venv
+.git
+.claude
+.pytest_cache
+**/__pycache__
+metadata_snapshots
+.env
+*.pem
+*.p8
+tests

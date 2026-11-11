@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (open lake catalogs)
+- **Lake catalog readers** (`catalog/`) for Fivetran Managed Data Lake
+  destinations, which have no SQL information schema. They yield the same
+  column attributes the warehouse readers do (`data_type`, `nullable`,
+  `max_length`), plus table format, format version, location, partition spec,
+  last update, current snapshot and, from Iceberg identifier fields, PKs.
+  - **Polaris / Iceberg REST** (plain httpx, OAuth client credentials,
+    `scope=PRINCIPAL_ROLE:ALL`): resolves the URL prefix via `/v1/config`,
+    loads only the tables in the snapshot, refreshes an expired token once.
+  - **AWS Glue** (boto3, `catalog-glue` extra): one `GetTables` walk per
+    database; `iceberg.field.optional` gives nullability, `varchar(n)` length.
+  - **Unity Catalog, BigLake metastore, OneLake**: documented stubs
+    (`catalog/stubs.py`), reported as `not_implemented`.
+- Destination detection reads the lake from `GET /v1/destinations/{id}`:
+  `polaris_catalog_configuration` (endpoint, catalog = destination id,
+  client id), `should_maintain_tables_in_glue` / `_databricks` (+ Unity
+  catalog), BigLake/OneLake flags, bucket, region, `should_write_delta`. Only
+  `POLARIS_CLIENT_SECRET` must be set; `LAKE_CATALOGS`, `POLARIS_*`, `GLUE_*`
+  override. New `sources.fivetran.destination.lake` (lake destinations only).
+- Same fault isolation as the warehouse readers: each catalog under its own
+  guard, one table failing never blocks the others (`source: "catalog"`
+  errors), reader construction contained. `build_scope.catalog_enrichment`
+  records each catalog's outcome and is present only when catalogs applied,
+  so warehouse builds keep their scope and drift baseline.
+- `warehouse_objects[].lake` and `columns[].schema_source` /
+  `data_type_source` / `key_source` values `catalog:<type>`.
+
+### Added (semantic context for any agent)
+- **`get_semantic_context`** (MCP tool, `GET /semantic/context`,
+  `metadata-service semantic-context`): one call returning, for a metric,
+  model, table or topic, the dbt Semantic Layer definition (measures with
+  agg/expr, ratio inputs, filters, grain, group-by dimensions, entities),
+  model/column descriptions, synonyms (dbt `meta.synonyms`, curated overrides,
+  and legacy source column names found through column-level lineage), Fivetran
+  provenance per connection (last sync, staleness, live vs fixtures), DQ trust
+  (level + caveats from failing/warn/unverified tests, stale syncs, quarantine
+  registers) and the physical location per engine/catalog. Small payloads:
+  `top_k`, column/dimension/caveat caps with `*_truncated` counts, empty fields
+  dropped.
+- **`list_semantic_metrics`** (MCP, `GET /semantic/metrics`,
+  `metadata-service semantic-metrics`), and `search` / `fetch` following the
+  ChatGPT company-knowledge / deep-research convention.
+- `SEMANTIC_OVERRIDES_FILE`: curated synonyms, metric notes, DQ-rule impact
+  text, out-of-scope nodes and agent guidance. Example generated from the
+  Guidewire demo's `curated_context.py`:
+  `examples/semantic_overrides/guidewire_underwriting.json`.
+- dbt normalizer keeps Semantic Layer definitions in the snapshot: metric
+  `type_params`, `filter`, `time_granularity`, `meta`, dependencies; semantic
+  model entities, dimensions, `measure_details`, `agg_time_dimension`,
+  `relation_name`. Existing fields are unchanged.
+
+### Added (remote MCP for any agent)
+- Streamable HTTP served by uvicorn with auth: **`api_key`** (static bearer
+  `METADATA_API_KEY` / `MCP_API_KEYS`, `Authorization: Bearer` or
+  `X-API-Key`) for Claude Code, Claude connector request headers, Google ADK /
+  Gemini CLI and Databricks UC connections; **`oauth`** (OAuth 2.1 resource
+  server: RFC 9728 protected-resource metadata, JWTs validated against the
+  issuer's JWKS for `iss`/`exp`/`aud`/scopes) for ChatGPT and Snowflake
+  Cortex, which accept OAuth only. Static keys are accepted in OAuth mode too.
+- Read-only tool allowlist by default on HTTP (`MCP_TOOLS=auto`;
+  `refresh_metadata` is stdio-only unless `MCP_TOOLS=all`), `readOnlyHint`
+  annotations, structured tool output, unauthenticated `/health`, stateless
+  mode for autoscaling, Host allowlist from `MCP_PUBLIC_URL` /
+  `MCP_ALLOWED_HOSTS`.
+- `serve-mcp --transport http` on a public bind now starts when auth is
+  configured (it was refused outright); SSE still requires a proxy.
+- `Dockerfile`, `deploy/cloudrun/deploy.sh` (not run) and
+  `docs/any-agent-mcp.md` with connection steps for Claude, ChatGPT, Gemini,
+  Snowflake Cortex and Databricks/Genie.
+- Extras: `catalog-glue` (boto3), `remote` (MCP SDK + sqlglot).
+
 ### Fixed (dbt Fusion + dbt State: `reused` results read as evidence)
 - With dbt State (state-aware orchestration, the default on dbt v2 / Fusion), a
   run after a 0-row sync re-executes nothing: unchanged nodes report

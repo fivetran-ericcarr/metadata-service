@@ -160,7 +160,7 @@ The primary artifact. Top-level shape:
 | `activations` | object | Reverse-ETL syncs + readiness verdicts (section 2.7) |
 | `schema_drift` | array | Drift vs the previous snapshot (section 2.5) |
 | `errors` | array | Non-fatal extraction/normalization errors |
-| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, fivetran_fixtures, pk_enrichment, column_schema_enrichment}`. `fixtures` is a fully offline build; `fivetran_fixtures` means only the Fivetran payload came from fixtures (`--fivetran-fixtures-dir`) while dbt, Activations and warehouse enrichment ran live. `pk_enrichment` and `column_schema_enrichment` each report `not_requested`/`unavailable`/`ran`/`failed` **independently** — the Platform Connector's `fivetran_metadata` schema and the destination's `INFORMATION_SCHEMA` are different objects, commonly accessible to a role one at a time (e.g. `INFORMATION_SCHEMA` works the moment the credential is granted; `fivetran_metadata` only exists once the Fivetran Platform Connector itself has been added and synced), so one failing must not suppress a read that would otherwise have succeeded. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
+| `build_scope` | object | What this build **effectively** covered — `{group_id, include_fivetran, include_dbt, include_activations, connected_only, skip_paused, dbt_project_id, dbt_job_id, fixtures, fivetran_fixtures, pk_enrichment, column_schema_enrichment}`. `fixtures` is a fully offline build; `fivetran_fixtures` means only the Fivetran payload came from fixtures (`--fivetran-fixtures-dir`) while dbt, Activations and warehouse enrichment ran live. `pk_enrichment` and `column_schema_enrichment` each report `not_requested`/`unavailable`/`ran`/`failed` **independently** — the Platform Connector's `fivetran_metadata` schema and the destination's `INFORMATION_SCHEMA` are different objects, commonly accessible to a role one at a time (e.g. `INFORMATION_SCHEMA` works the moment the credential is granted; `fivetran_metadata` only exists once the Fivetran Platform Connector itself has been added and synced), so one failing must not suppress a read that would otherwise have succeeded. `catalog_enrichment` (present **only** when lake catalogs applied: a Managed Data Lake destination, or `LAKE_CATALOGS` forced; absent on warehouse builds, so their scope is unchanged) maps each catalog to `ran`/`failed`/`not_configured` (e.g. no `POLARIS_CLIENT_SECRET`)/`not_implemented` (Unity/BigLake/OneLake stubs), e.g. `{"polaris": "ran", "glue": "failed", "unity": "not_implemented"}`. Records what actually ran (a source with missing credentials reads `false`), so drift only compares like-for-like builds; a scope change yields a single `comparison_skipped` drift marker rather than mass table churn. |
 
 ### 2.1 `sources.fivetran`
 
@@ -353,15 +353,15 @@ downstream models.
 | `dbt.tests` | Tests attached to the matched source + models |
 | `dbt.freshness` | Freshness result/config for the matched source (or `null`) |
 | `columns[].data_type` | Warehouse data type. Preferred from `INFORMATION_SCHEMA.COLUMNS`, falling back to the dbt catalog (or a documented `data_type`); `null` when neither source covers the column |
-| `columns[].data_type_source` | `information_schema`, `dbt_catalog`, or `null` — which source supplied `data_type` |
+| `columns[].data_type_source` | `information_schema`, `catalog:polaris` / `catalog:glue` (lake catalog), `dbt_catalog`, or `null` — which source supplied `data_type` |
 | `columns[].max_length` | `CHARACTER_MAXIMUM_LENGTH`; `null` for every non-character type, and `null` when the warehouse reader did not run. The dbt catalog cannot supply this |
 | `columns[].nullable` | `IS_NULLABLE` as a bool; `null` when the reader did not run or the warehouse reported a value that is neither `YES` nor `NO`. The dbt catalog cannot supply this |
-| `columns[].schema_source` | `information_schema` when a warehouse read matched this column (and so `max_length`/`nullable` are authoritative), else `null`. Distinct from `data_type_source`, which describes only `data_type` |
+| `columns[].schema_source` | `information_schema` when a warehouse read matched this column, or `catalog:<type>` when a lake catalog did (and so `max_length`/`nullable` are authoritative — Iceberg strings carry no length, so `max_length` is `null` except `fixed[n]`; Glue `varchar(n)` gives `n`), else `null`. Distinct from `data_type_source`, which describes only `data_type` |
 | `columns[].unique` | **Derived, not a warehouse constraint** — see below |
 | `columns[].unique_source` | `primary_key`, `dbt_test`, or `null` — where the `unique` signal came from |
 | `columns[].is_primary_key` | True only for an unambiguous Fivetran primary key (see below) |
 | `columns[].key_constraint` | `primary_key`, `primary_or_foreign_key`, or `null` |
-| `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, else `null` |
+| `columns[].key_source` | `fivetran_platform` when the PK came from the warehouse reader, `catalog:polaris` when it came from Iceberg identifier fields, else `null` |
 | `columns[].dbt_tests` | dbt test types already present on that column |
 | `columns[].recommended_tests` | Test names recommended for that column (see 2.4) |
 | `match_confidence` | `exact_schema_table`, `case_insensitive_schema_table`, `configured_alias`, or `unmatched`. (`exact_relation` is reserved for a future database-qualified match tier and is not currently produced.) |
@@ -463,6 +463,70 @@ every password-format config field as the literal `"******"` — so the operator
 still supplies a read-only credential via `WAREHOUSE_USER` plus
 `WAREHOUSE_PASSWORD` or `WAREHOUSE_PRIVATE_KEY_PATH`. Only non-secret coordinates
 are kept, and the raw `config` never reaches a snapshot.
+
+#### Lake fields (Managed Data Lake destinations)
+
+`warehouse_objects[].lake` is present only when a lake catalog described the
+table:
+
+```json
+"lake": {
+  "catalogs": ["polaris", "glue"],
+  "table_format": "iceberg", "format_version": 2,
+  "location": "s3://bucket/prefix/salesforce/account",
+  "partition_spec": [{"source_column": "_fivetran_synced", "transform": "day", "name": "_fivetran_synced_day"}],
+  "last_updated": "2026-11-10T08:00:00Z",
+  "current_snapshot_id": 77, "snapshot_at": "2026-11-10T08:00:00Z",
+  "snapshot_operation": "overwrite", "total_records": 1250
+}
+```
+
+`catalogs` lists every catalog that knew the table, in precedence order
+(Polaris, Glue, Unity, BigLake, OneLake); each attribute comes from the first
+catalog that had it. Glue supplies no snapshot fields and no PKs.
+
+`sources.fivetran.destination.lake` (lake destinations only) holds the
+non-secret coordinates from `GET /v1/destinations/{id}`:
+
+```json
+"lake": {
+  "storage_provider": "AWS", "bucket": "my-lake-bucket", "prefix_path": null, "region": "us-west-2",
+  "table_formats": ["iceberg", "delta"],
+  "catalogs": [
+    {"type": "polaris", "enabled": true, "endpoint": "https://<host>.polaris.fivetran.com/api/catalog",
+     "catalog": "<destination_id>", "client_id": "<oauth client id>"},
+    {"type": "glue", "enabled": true, "region": "us-west-2", "catalog_id": null},
+    {"type": "unity", "enabled": true, "catalog": "<uc catalog>", "host": "<workspace host>"}
+  ]
+}
+```
+
+The Polaris `client_secret` and every other masked field are dropped. The
+OAuth `client_id` is an identifier, not a credential.
+
+### 2.3a Semantic Layer records (`sources.dbt.metrics[]`, `sources.dbt.semantic_models[]`)
+
+Metrics keep their definition (all fields new except `unique_id`, `name`,
+`label`, `type`, `description`, `model_unique_ids`):
+
+| Field | Meaning |
+|---|---|
+| `type_params` | Compacted: `measure` / `numerator` / `denominator` (`{name, alias?, filter?, offset_window?, fill_nulls_with?}`), `expr`, `metrics[]` (derived inputs), `input_measures[]`, `window`, `grain_to_date`, `conversion` |
+| `filter` | The metric's `where_sql_template` strings |
+| `time_granularity` | The metric's default grain, when set |
+| `semantic_model_unique_ids` / `input_metric_unique_ids` | Direct dependencies |
+| `meta` / `tags` | From the manifest (`meta.synonyms` feeds `get_semantic_context`) |
+
+Semantic models keep `measures` (names, unchanged) and add `description`,
+`label`, `relation_name`, `agg_time_dimension`, `primary_entity`,
+`entities[] {name, type, expr}`, `dimensions[] {name, type, expr, label,
+description, time_granularity}` and `measure_details[] {name, agg, expr,
+label, description, agg_time_dimension, non_additive_dimension}`.
+
+These feed `get_semantic_context` (MCP), `GET /semantic/context` (REST) and
+`metadata-service semantic-context` (CLI), a derived view over the snapshot
+documented in [docs/any-agent-mcp.md](docs/any-agent-mcp.md#get_semantic_context-response).
+Nothing is written for it.
 
 ### 2.4 `dq_recommendations[]`
 
@@ -592,6 +656,11 @@ swallows errors and never logs credentials.
 written by a non-executing command (`args.which` such as `generate`, `compile`,
 `run-operation`). It is ignored rather than read as passing: every model's and
 test's `latest_status` is `null` (**unknown**, not passing) in that snapshot.
+
+`source: "catalog"` errors come from lake catalog reads: one per table that
+failed to load (`catalog`, `schema`, `table`, `error_type`, `error_message`
+with the HTTP status only) or one per catalog that failed outright. They make
+the build `partial`, never `degraded` on their own.
 
 `ReusedWithoutPriorResult` (dbt) lists nodes (`count`, first 50 `unique_ids`)
 that dbt State reported `reused` but for which no executed result with matching

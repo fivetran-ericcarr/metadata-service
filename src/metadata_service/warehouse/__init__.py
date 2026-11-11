@@ -21,7 +21,7 @@ from .base import (
     get_warehouse_reader,
     resolve_warehouse_type,
 )
-from .destination import DestinationInfo, describe_destination, destination_from_dict
+from .destination import DestinationInfo, describe_destination, describe_lake, destination_from_dict
 from .fivetran_metadata import build_primary_key_sql, rows_to_pk_map
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "build_column_schema_sql",
     "build_primary_key_sql",
     "describe_destination",
+    "describe_lake",
     "destination_from_dict",
     "get_warehouse_reader",
     "resolve_warehouse_type",

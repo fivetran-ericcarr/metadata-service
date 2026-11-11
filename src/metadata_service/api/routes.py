@@ -181,3 +181,43 @@ def dq_activation_readiness(
         if label and (s.get("label") or "").lower() == label.lower():
             return s
     raise HTTPException(status_code=404, detail=f"No activation for sync_id={sync_id!r} label={label!r}.")
+
+
+def _semantic_call(fn, **kwargs) -> dict:
+    from ..mcp.tools import MetadataUnavailable
+
+    try:
+        return fn(settings=get_settings(), **kwargs)
+    except MetadataUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/semantic/context")
+def semantic_context(
+    query: str = Query(..., description="Metric, dbt model, schema.table, or a topic."),
+    kind: str = Query(default="auto"),
+    top_k: int = Query(default=2, ge=1, le=10),
+    max_columns: int = Query(default=15, ge=1, le=100),
+) -> dict:
+    """Same payload as the get_semantic_context MCP tool."""
+    from ..mcp import tools
+
+    result = _semantic_call(tools.get_semantic_context, query=query, kind=kind, top_k=top_k,
+                            max_columns=max_columns)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/semantic/metrics")
+def semantic_metrics(
+    trust_level: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Same payload as the list_semantic_metrics MCP tool."""
+    from ..mcp import tools
+
+    return _semantic_call(tools.list_semantic_metrics, trust_level=trust_level, search=search,
+                          limit=limit, offset=offset)

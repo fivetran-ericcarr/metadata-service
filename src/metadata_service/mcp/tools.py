@@ -469,3 +469,73 @@ def get_schema_drift(
     if severity:
         drift = [d for d in drift if d.get("severity") == severity]
     return {"count": len(drift), "drift": drift}
+
+
+# -- semantic context (any-agent grounding) --------------------------------
+def _overrides(settings: Settings) -> dict:
+    from ..semantic import load_overrides
+
+    return load_overrides(settings.semantic_overrides_file)
+
+
+def get_semantic_context(query: str, kind: str = "auto", top_k: int = 2, max_columns: int = 15,
+                         settings: Settings | None = None) -> dict:
+    """One call to ground SQL and caveats for a metric, model, table or topic:
+    Semantic Layer definition, descriptions, synonyms (incl. legacy source
+    column names), Fivetran provenance, DQ trust and physical locations."""
+    from ..semantic import semantic_context
+
+    settings = settings or get_settings()
+    if kind not in ("auto", "topic", "metric", "model", "table"):
+        return {"error": f"Unknown kind {kind!r}. Valid: auto, topic, metric, model, table."}
+    if not (query or "").strip():
+        return {"error": "query is required (a metric/model/table name or a question topic)."}
+    return semantic_context(_latest(settings), query, kind=kind, top_k=top_k,
+                            max_columns=max(1, min(int(max_columns or 15), 100)),
+                            overrides=_overrides(settings))
+
+
+def list_semantic_metrics(trust_level: str | None = None, search: str | None = None,
+                          limit: int = 50, offset: int = 0, settings: Settings | None = None) -> dict:
+    """Paginated Semantic Layer metric catalog with definition summary + trust."""
+    from ..semantic import list_semantic_metrics as _list
+
+    settings = settings or get_settings()
+    return _list(_latest(settings), trust_level=trust_level, search=search, limit=limit,
+                 offset=max(0, int(offset or 0)), overrides=_overrides(settings))
+
+
+def search(query: str, settings: Settings | None = None) -> dict:
+    """ChatGPT company-knowledge / deep-research ``search``: ``{results: [{id, title, url}]}``."""
+    from ..semantic import search_documents
+
+    settings = settings or get_settings()
+    return {"results": search_documents(_latest(settings), query, base_url=_public_base(settings),
+                                        overrides=_overrides(settings))}
+
+
+def fetch(id: str, settings: Settings | None = None) -> dict:  # noqa: A002 - name fixed by ChatGPT
+    """ChatGPT ``fetch``: one document ``{id, title, text, url, metadata}`` whose
+    text is the semantic context JSON for the id returned by ``search``."""
+    import json as _json
+
+    from ..semantic import document_url
+
+    settings = settings or get_settings()
+    ctx = get_semantic_context(id, top_k=1, settings=settings)
+    subject = (ctx.get("subjects") or [{}])[0]
+    return {
+        "id": id,
+        "title": f"{subject.get('kind', 'item')}: {subject.get('name', id)}",
+        "text": _json.dumps(ctx, default=str),
+        "url": document_url(id, _public_base(settings)),
+        "metadata": {"trust_level": (ctx.get("trust") or {}).get("level"),
+                     "snapshot_generated_at": (ctx.get("snapshot") or {}).get("generated_at")},
+    }
+
+
+def _public_base(settings: Settings) -> str | None:
+    url = (settings.mcp_public_url or "").rstrip("/")
+    if url.endswith("/mcp"):
+        url = url[: -len("/mcp")]
+    return url or None

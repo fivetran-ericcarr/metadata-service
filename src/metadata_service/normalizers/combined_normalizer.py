@@ -313,6 +313,9 @@ class CombinedNormalizer:
             "columns": columns,
             "match_confidence": confidence,
             "match_notes": notes,
+            # Open-lake facts (table format, partition spec, snapshot) from the
+            # catalog readers; absent for warehouse destinations.
+            **({"lake": table["lake"]} if table.get("lake") else {}),
         }
 
     def _resolve_alias(self, dest_schema, dest_table, source_index, model_index):
