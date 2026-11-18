@@ -38,6 +38,26 @@ def run_results_command(run_results: dict | None) -> str | None:
     return str(which) if which else None
 
 
+def _tested_dep(deps: list, model_arg) -> str | None:
+    """The node a test is attached to, when the manifest has no ``attached_node``.
+
+    A relationships test depends on both the tested node and its ``to`` target, and
+    ``depends_on`` is sorted, so ``deps[0]`` can be the target (``seed.`` sorts before
+    ``source.``). Prefer the dependency named in the test's ``model`` argument
+    (e.g. ``{{ get_where_subquery(source('salesforce', 'opportunity')) }}``).
+    """
+    if not deps:
+        return None
+    text = str(model_arg or "")
+    for dep in deps:
+        parts = dep.split(".")
+        if dep.startswith("source.") and len(parts) >= 4 and f"'{parts[-2]}'" in text and f"'{parts[-1]}'" in text:
+            return dep
+        if not dep.startswith("source.") and f"'{parts[-1]}'" in text and ("ref(" in text or "source(" not in text):
+            return dep
+    return deps[0]
+
+
 class DbtNormalizer:
     def normalize(self, raw: dict) -> dict:
         raw = raw or {}
@@ -323,7 +343,7 @@ class DbtNormalizer:
                 attached_node = node.get("attached_node")
                 if not attached_node:
                     deps = (node.get("depends_on") or {}).get("nodes") or []
-                    attached_node = deps[0] if deps else None
+                    attached_node = _tested_dep(deps, (test_meta.get("kwargs") or {}).get("model"))
                 attached_column = node.get("column_name") or (test_meta.get("kwargs") or {}).get("column_name")
                 status = run_status.get(uid) or {}
                 tests.append(
