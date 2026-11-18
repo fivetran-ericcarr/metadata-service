@@ -40,6 +40,24 @@ def test_relationship_heuristic_for_id_columns(built_doc):
     assert rel and rel[0]["confidence"] == "heuristic"
 
 
+def test_relationship_heuristic_skips_keys_of_the_table():
+    # File-based sources (e.g. Fivetran S3) only declare _file/_line as primary key. A *_id column that already has
+    # a unique test, or that is named after its own table, is this table's key, not a reference to another table.
+    obj = {
+        "object_id": "warehouse://db/raw/legacy_orders",
+        "schema": "raw",
+        "name": "legacy_orders",
+        "columns": [
+            {"name": "hs_object_id", "dbt_tests": ["unique", "not_null"]},
+            {"name": "order_id", "dbt_tests": ["not_null"]},
+            {"name": "customer_id", "dbt_tests": []},
+        ],
+        "dbt": {},
+    }
+    rel = {r["target"]["column"] for r in recommend_for_object(obj) if r.get("test_name") == "relationships"}
+    assert rel == {"customer_id"}
+
+
 def test_hashed_column_signal(built_doc):
     account = object_by_table(built_doc, "salesforce", "account")
     recs = _recs_for(built_doc, account["object_id"])

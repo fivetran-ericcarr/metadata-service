@@ -124,8 +124,12 @@ def recommend_for_object(obj: dict, *, stale_threshold_hours: int = 24,
                 "source": "heuristic",
             })
 
-        # Relationships (heuristic) for *_id non-PK columns
-        if lowered.endswith("_id") and not col.get("is_primary_key") and "relationships" not in existing:
+        # Relationships (heuristic) for *_id columns that reference another table. Skip keys of this table:
+        # Fivetran primary keys, columns already tested unique, and columns named after the table itself
+        # (order_id in ORDERS). File-based connectors only declare _file/_line as primary key, so the
+        # dbt unique test is the only signal that e.g. hs_object_id is this table's own key.
+        if (lowered.endswith("_id") and not col.get("is_primary_key") and "relationships" not in existing
+                and "unique" not in existing and not _names_own_table(lowered, table)):
             recs.append({
                 "object_id": object_id,
                 "recommendation_type": "dbt_test",
@@ -324,6 +328,13 @@ def _dbt_test(object_id, test_name, target, confidence, reason) -> dict:
         "confidence": confidence,
         "source": "fivetran_metadata",
     }
+
+
+def _names_own_table(lowered_column: str, table: str | None) -> bool:
+    """True for e.g. order_id in ORDERS / legacy_orders: the column is the table's own identifier."""
+    stem = lowered_column[:-3]
+    t = (table or "").lower()
+    return bool(stem) and any(t == stem + suffix or t.endswith("_" + stem + suffix) for suffix in ("", "s", "es"))
 
 
 def _looks_categorical(lowered_name: str) -> bool:
