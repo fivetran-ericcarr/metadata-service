@@ -160,8 +160,10 @@ def build_metadata(
         activations_raw = _extract_activations(settings) if eff_activations else _empty_activations()
 
     fivetran_norm = FivetranNormalizer().normalize(fivetran_raw)
+    catalog_enrichment = None
     if enrich_warehouse and not fixtures_dir and include_fivetran:
         enrichment = _enrich_from_warehouse(settings, fivetran_norm)
+        catalog_enrichment = _enrich_from_catalogs(settings, fivetran_norm)
     dbt_norm = DbtNormalizer().normalize(dbt_raw)
     activations_norm = ActivationsNormalizer().normalize(activations_raw)
     doc = CombinedNormalizer(settings, aliases=aliases).build(fivetran_norm, dbt_norm, activations_norm)
@@ -186,6 +188,11 @@ def build_metadata(
         "pk_enrichment": enrichment["pk_enrichment"],
         "column_schema_enrichment": enrichment["column_schema_enrichment"],
     }
+    # Only present when lake catalogs applied (a Managed Data Lake destination,
+    # or LAKE_CATALOGS forced), so a warehouse build's scope — and therefore its
+    # drift comparison against an older baseline — is unchanged.
+    if catalog_enrichment:
+        doc["build_scope"]["catalog_enrichment"] = catalog_enrichment
     logger.info(
         "Built metadata: %s warehouse objects, %s recommendations, %s errors",
         len(doc.get("warehouse_objects", [])),
@@ -390,6 +397,63 @@ def _enrich_from_warehouse(settings: Settings, fivetran_norm: dict) -> dict:
                 reader.close()
             except Exception:  # pragma: no cover
                 pass
+
+
+def _enrich_from_catalogs(settings: Settings, fivetran_norm: dict) -> dict | None:
+    """Enrich normalized tables/columns from the destination's lake catalogs.
+
+    Same fault isolation as :func:`_enrich_from_warehouse`: each catalog is
+    read under its own guard (Polaris failing never skips Glue), one table
+    failing to load is recorded in ``errors`` and never blocks the others, and
+    reader construction failures are contained.
+
+    Returns ``{catalog_type: outcome}`` for build_scope — ``ran``, ``failed``,
+    ``not_configured`` (e.g. no POLARIS_CLIENT_SECRET) or ``not_implemented``
+    (Unity/BigLake/OneLake stubs) — or None when no catalog applies (a
+    warehouse destination with LAKE_CATALOGS=auto).
+    """
+    from .catalog import apply_catalog_tables, plan_catalog_readers, wanted_tables
+    from .warehouse import destination_from_dict
+
+    try:
+        destination = destination_from_dict(fivetran_norm.get("destination"))
+        plans = plan_catalog_readers(settings, destination)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Catalog planning FAILED: %s", exc)
+        return {"planning": "failed"}
+    if not plans:
+        return None
+
+    tables = wanted_tables(fivetran_norm)
+    errors = fivetran_norm.setdefault("errors", [])
+    outcomes: dict[str, str] = {}
+    for plan in plans:
+        if plan.reader is None:
+            outcomes[plan.catalog_type] = plan.outcome or "unavailable"
+            logger.info("Catalog %s skipped (%s): %s", plan.catalog_type, plan.outcome, plan.reason)
+            continue
+        try:
+            result = plan.reader.read_tables(tables)
+            counts = apply_catalog_tables(fivetran_norm, plan.catalog_type, result.tables)
+            errors.extend(result.errors)
+            logger.info(
+                "Catalog %s: %s/%s tables resolved (%s missing, %s failed); %s columns, %s PKs enriched",
+                plan.catalog_type, len(result.tables), len(tables), len(result.missing),
+                len(result.errors), counts["columns"], counts["primary_keys"])
+            outcomes[plan.catalog_type] = "ran"
+        except Exception as exc:
+            logger.error("Catalog %s enrichment FAILED (other catalogs unaffected): %s",
+                         plan.catalog_type, exc)
+            errors.append({"source": "catalog", "catalog": plan.catalog_type,
+                           "error_type": type(exc).__name__,
+                           "error_message": f"{plan.catalog_type} catalog read failed: {exc}"[:300]})
+            outcomes[plan.catalog_type] = "failed"
+        finally:
+            try:
+                plan.reader.close()
+            except Exception:  # pragma: no cover
+                pass
+    return outcomes
 
 
 def _destination_schemas(fivetran_norm: dict) -> list[str]:

@@ -1,0 +1,417 @@
+{
+  "_comment": "Generated from guidewire-snowflake-dq-demo semantic/curated_context.py: the curated vocabulary the dbt manifest does not carry. Serve it with SEMANTIC_OVERRIDES_FILE.",
+  "synonyms": {
+    "written_premium": [
+      "GWP",
+      "gross written premium",
+      "bound premium"
+    ],
+    "quoted_premium": [
+      "quote premium",
+      "total premium"
+    ],
+    "risk_state_code": [
+      "state",
+      "risk state",
+      "primary state",
+      "policy state"
+    ],
+    "rated_state_code": [
+      "rated state",
+      "rating state",
+      "state of rating"
+    ],
+    "state_code": [
+      "state"
+    ],
+    "hazard_group_code": [
+      "hazard group",
+      "NCCI hazard group",
+      "hazard grade"
+    ],
+    "risk_grade_code": [
+      "risk grade",
+      "underwriting grade",
+      "risk tier"
+    ],
+    "rate_mode_code": [
+      "rating mode",
+      "rate mode"
+    ],
+    "market_type_code": [
+      "channel",
+      "distribution channel",
+      "market type"
+    ],
+    "line_of_business_code": [
+      "LOB",
+      "line of business",
+      "product line"
+    ],
+    "agency_id": [
+      "producer",
+      "agency",
+      "agent",
+      "broker"
+    ],
+    "transaction_type": [
+      "transaction type",
+      "business type",
+      "new vs renewal"
+    ],
+    "quote_date": [
+      "quote created date",
+      "quoted on",
+      "quote date"
+    ],
+    "effective_date": [
+      "policy effective date",
+      "inception date"
+    ],
+    "policy_effective_date": [
+      "inception date",
+      "effective date"
+    ],
+    "is_bound": [
+      "bound",
+      "bind flag",
+      "converted",
+      "won"
+    ],
+    "is_cancelled": [
+      "cancelled",
+      "canceled"
+    ],
+    "is_declined": [
+      "declined",
+      "rejected"
+    ],
+    "is_premium_trusted": [
+      "trusted premium",
+      "premium passed data quality",
+      "clean premium"
+    ],
+    "dq_rule_ids": [
+      "data quality issues",
+      "DQ rules broken",
+      "quarantine reason",
+      "exclusion reason"
+    ],
+    "submission_status": [
+      "submission status",
+      "quote outcome"
+    ],
+    "premium_change_pct": [
+      "rate change",
+      "premium change percent",
+      "renewal rate change"
+    ],
+    "premium_change_amount": [
+      "premium change",
+      "additional or return premium"
+    ],
+    "experience_mod_factor": [
+      "EMR",
+      "experience mod",
+      "X-mod",
+      "experience modification"
+    ],
+    "rated_schedule_mod_factor": [
+      "schedule mod",
+      "schedule rating credit"
+    ],
+    "schedule_mod_factor": [
+      "schedule mod",
+      "schedule rating credit"
+    ],
+    "avg_schedule_mod_factor": [
+      "average schedule mod"
+    ],
+    "avg_experience_mod_factor": [
+      "average EMR",
+      "average experience mod"
+    ],
+    "large_deductible_factor": [
+      "large deductible credit",
+      "LDD factor"
+    ],
+    "deposit_factor": [
+      "deposit share"
+    ],
+    "target_premium_amount": [
+      "technical premium",
+      "target premium"
+    ],
+    "target_premium": [
+      "technical premium",
+      "rating engine target premium"
+    ],
+    "rated_term_payroll": [
+      "payroll",
+      "exposure",
+      "exposure base"
+    ],
+    "term_payroll": [
+      "payroll",
+      "exposure",
+      "exposure base"
+    ],
+    "rated_state_payroll": [
+      "payroll",
+      "exposure"
+    ],
+    "loss_cost_rate": [
+      "rate per 100 of payroll",
+      "effective rate"
+    ],
+    "premium_rate_per_100_payroll": [
+      "rate per 100 of payroll",
+      "effective rate"
+    ],
+    "employee_count": [
+      "employees",
+      "headcount"
+    ],
+    "transaction_category": [
+      "transaction kind"
+    ],
+    "cancelled_premium": [
+      "return premium on cancellation"
+    ],
+    "cancellation_method": [
+      "return premium method"
+    ],
+    "cancellation_reason": [
+      "why cancelled"
+    ],
+    "naics_code": [
+      "industry",
+      "NAICS"
+    ],
+    "account_name": [
+      "customer name",
+      "account holder"
+    ],
+    "insured_name": [
+      "named insured"
+    ],
+    "submission_month": [
+      "intake month",
+      "month received"
+    ],
+    "rule_id": [
+      "DQ rule",
+      "data quality rule"
+    ],
+    "issue_detail": [
+      "DQ issue",
+      "issue description"
+    ],
+    "dq_class": [
+      "DQ severity",
+      "blocking or advisory"
+    ],
+    "record_key": [
+      "quarantined record id"
+    ],
+    "silver_model": [
+      "affected model"
+    ],
+    "unlinked_rating_count": [
+      "cross-source orphans",
+      "ratings without a Guidewire quote"
+    ]
+  },
+  "metric_synonyms": {
+    "written_premium": [
+      "GWP",
+      "gross written premium",
+      "premium written",
+      "bound premium",
+      "total written premium"
+    ],
+    "quote_count": [
+      "number of quotes",
+      "quote volume",
+      "quotes issued"
+    ],
+    "bound_quotes": [
+      "binds",
+      "bound policies",
+      "policies bound",
+      "number bound"
+    ],
+    "bind_rate": [
+      "bind ratio",
+      "hit ratio",
+      "quote-to-bind ratio",
+      "conversion rate",
+      "close rate"
+    ],
+    "avg_premium_change_pct": [
+      "rate change",
+      "average rate change",
+      "premium change vs expiring"
+    ],
+    "cancelled_policies": [
+      "cancellations",
+      "number of cancellations"
+    ],
+    "cancellation_rate": [
+      "cancel rate",
+      "cancellation ratio"
+    ],
+    "avg_endorsement_premium_change_pct": [
+      "endorsement premium change",
+      "mid-term adjustment",
+      "MTA premium change"
+    ],
+    "total_quoted_premium": [
+      "quoted premium",
+      "quote premium total"
+    ],
+    "total_rated_payroll": [
+      "rated payroll",
+      "exposure"
+    ],
+    "policy_transaction_count": [
+      "number of policy transactions"
+    ],
+    "endorsement_premium_change": [
+      "net endorsement premium",
+      "additional and return premium"
+    ],
+    "total_cancelled_premium": [
+      "return premium",
+      "premium returned on cancellation"
+    ],
+    "loss_cost_rate": [
+      "rate per 100 of payroll",
+      "effective rate",
+      "rate adequacy"
+    ],
+    "submission_bind_rate": [
+      "funnel bind rate",
+      "submission conversion"
+    ],
+    "quarantined_records": [
+      "DQ issues",
+      "quarantined rows"
+    ]
+  },
+  "table_synonyms": {
+    "fct_quote": [
+      "quote fact",
+      "quotes",
+      "priced submissions"
+    ],
+    "fct_policy_transaction": [
+      "policy transactions",
+      "endorsements",
+      "policy changes",
+      "cancellations",
+      "post-bind transactions"
+    ],
+    "mart_policy_360": [
+      "policy 360",
+      "policy chain",
+      "policies",
+      "full policy view"
+    ],
+    "mart_underwriting_funnel": [
+      "underwriting funnel",
+      "submission funnel",
+      "pipeline"
+    ],
+    "mart_premium_by_state_hazard": [
+      "premium by state and hazard group",
+      "rating exposure",
+      "rate adequacy"
+    ],
+    "dim_account": [
+      "accounts",
+      "customers",
+      "commercial accounts"
+    ],
+    "dim_insured": [
+      "named insureds",
+      "insureds"
+    ],
+    "dq_quarantine": [
+      "data quality quarantine",
+      "quarantine register",
+      "excluded records",
+      "data quality issues"
+    ]
+  },
+  "metric_notes": {
+    "written_premium": "Excludes unbound quotes and quotes with a blocking data-quality issue (is_premium_trusted = false).",
+    "bind_rate": "Defined per QUOTE (bound quotes / all quotes). underwriting_funnel.submission_bind_rate is per SUBMISSION (bound / quoted submissions) and is a different number.",
+    "bound_quotes": "Bound quotes whose premium is quarantined still count as bound.",
+    "cancellation_rate": "Denominator is bound quotes (including bound quotes whose premium is quarantined); numerator is bound quotes whose policy has a Completed cancellation.",
+    "avg_endorsement_premium_change_pct": "Averages premium_change_pct over all policy changes (endorsements, renewals, reinstatements, new-business issuance); cancellations carry no premium_change_pct and are ignored.",
+    "total_quoted_premium": "Includes untrusted (negative or non-reconciling) quote premiums -- not written premium."
+  },
+  "dq_rules": [
+    {
+      "id": "INVALID_RATED_STATE",
+      "pattern": "accepted_values_pd_state_rating_state_code",
+      "short": "{n} rated states invalid in PolicyDecision WKSTATE.STATECD (e.g. 'XX') -> reported as rated_state_code UNKNOWN in state_hazard_rating and NULL in quotes"
+    },
+    {
+      "id": "NEGATIVE_PREMIUM",
+      "pattern": "accepted_range_gw_quote_total_premium",
+      "short": "{n} negative-premium quotes are quarantined and excluded from written_premium",
+      "metrics": [
+        "written_premium"
+      ]
+    },
+    {
+      "id": "BREAKDOWN_MISMATCH",
+      "pattern": "sum_matches_parent_gw_quote_line_item",
+      "short": "{n} quotes whose premium line items do not reconcile are quarantined and excluded from written_premium",
+      "metrics": [
+        "written_premium"
+      ]
+    },
+    {
+      "id": "DUPLICATE_RATING_KEY",
+      "pattern": "unique_combination_of_columns_.*(wkpolicy|pd_policy_rating)",
+      "short": "{n} PolicyDecision WKPOLICY natural keys are duplicated; gold keeps the latest-synced copy"
+    },
+    {
+      "id": "MISSING_EMAIL",
+      "pattern": "not_null_gw_account_email",
+      "short": "{n} accounts have no primary email (has_email = false)"
+    },
+    {
+      "id": "ORPHAN_ACCOUNT",
+      "pattern": "relationships_gw_submission_account_id",
+      "short": "{n} submissions reference a non-existent account -> rolled up to the Unknown account (account_id = -1)"
+    },
+    {
+      "id": "UNLINKED_RATING",
+      "pattern": "relationships_pd_policy_pointer_quote_id",
+      "short": "{n} PolicyDecision ratings point at a Guidewire quote that does not exist (unlinked_rating_count)"
+    }
+  ],
+  "out_of_scope": {
+    "source_schemas": [
+      "guidewire_cda"
+    ],
+    "model_names": [
+      "fct_claim",
+      "mart_claims_summary"
+    ],
+    "model_prefixes": [
+      "cc_"
+    ]
+  },
+  "guidance": [
+    "Prefer the governed dbt metrics (written_premium, quote_count, bound_quotes, bind_rate, avg_premium_change_pct, cancelled_policies, cancellation_rate, avg_endorsement_premium_change_pct) over re-deriving them.",
+    "Written premium / GWP always means the written_premium metric (bound and trusted quotes). Never sum quoted_premium for written premium.",
+    "Legacy PolicyDecision column codes (RISKGRADECD, STATECD, HIGHBESTHAZGROUPCD, ...) are synonyms of the readable columns; map them and say which readable column you used.",
+    "Never filter out NULL or UNKNOWN groups: keep them so data-quality gaps stay visible.",
+    "For excluded or quarantined records use is_premium_trusted = FALSE with dq_rule_ids, and the dq_quarantine register."
+  ]
+}

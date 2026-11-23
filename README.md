@@ -83,9 +83,12 @@ src/metadata_service/
   storage/      base.py local_storage.py s3_storage.py
   dq/           recommendations.py drift.py lineage.py column_lineage.py
                 activation_gate.py
-  warehouse/    base.py snowflake_reader.py   (Platform Connector PK reader)
+  warehouse/    base.py snowflake_reader.py postgres_reader.py destination.py
+  catalog/      polaris.py glue.py iceberg.py stubs.py factory.py locations.py
+                (lake catalogs for Managed Data Lake destinations)
+  semantic/     context.py overrides.py   (get_semantic_context)
   api/          main.py routes.py
-  mcp/          server.py tools.py
+  mcp/          server.py tools.py auth.py
 ```
 
 ## 3. Setup
@@ -148,6 +151,13 @@ either workflow works. The `uv.lock` pins the reference environment.
 | `WAREHOUSE_PRIVATE_KEY_PATH` / `WAREHOUSE_PRIVATE_KEY_PASSPHRASE` / `WAREHOUSE_PASSWORD` | Reader auth (key-pair, optionally passphrase-protected, or password) | — |
 | `ACTIVATIONS_API_TOKEN` | Fivetran Activations (Census) workspace token — enables the reverse-ETL readiness gate | — |
 | `ACTIVATIONS_BASE_URL` | Activations API base | `https://app.getcensus.com/api/v1` |
+| `LAKE_CATALOGS` | Lake catalogs to read: `auto` (what the Managed Data Lake destination maintains), `none`, or a list (`polaris,glue`) | `auto` |
+| `POLARIS_CLIENT_SECRET` | Polaris catalog client secret (the one value Fivetran masks; endpoint, catalog and client id are derived) | — |
+| `POLARIS_ENDPOINT` / `POLARIS_CATALOG` / `POLARIS_CLIENT_ID` / `POLARIS_SCOPE` | Overrides for the derived Polaris coordinates | derived / `PRINCIPAL_ROLE:ALL` |
+| `GLUE_REGION` / `GLUE_CATALOG_ID` | Glue overrides (credentials from the AWS chain: `AWS_PROFILE`, SSO, env keys, workload role) | destination region |
+| `CATALOG_TIMEOUT_SECONDS` | Per-request catalog timeout | `30` |
+| `SEMANTIC_OVERRIDES_FILE` | Curated synonyms / metric notes / DQ rule text for `get_semantic_context` | — |
+| `MCP_TOOLS` / `MCP_AUTH` / `MCP_API_KEYS` / `MCP_OAUTH_*` / `MCP_PUBLIC_URL` / `MCP_ALLOWED_HOSTS` / `MCP_STATELESS` | Remote MCP: tool allowlist and auth, see [docs/any-agent-mcp.md](docs/any-agent-mcp.md) | `auto` / `auto` / … |
 
 Secrets are read from the environment only and are never logged.
 
@@ -167,6 +177,9 @@ metadata-service build --fivetran-fixtures-dir <dir>    # Fivetran from fixtures
 metadata-service fivetran extract --connected-only      # skip broken/incomplete setups
 metadata-service fivetran extract --skip-paused         # skip paused connections
 metadata-service build --group-id <group> --connected-only --skip-paused
+
+metadata-service semantic-context "bind rate by state"  # one-call grounding payload
+metadata-service semantic-metrics --trust-level at_risk # Semantic Layer metric catalog
 
 metadata-service drift                                  # compare latest vs previous snapshot
 metadata-service recommendations --schema salesforce --table account
@@ -237,7 +250,10 @@ uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remo
 
 | Tool | Use | Typical size |
 |---|---|---|
-| `get_dq_summary()` | **Start here.** Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
+| `get_semantic_context(query, kind, top_k, max_columns)` | **Ground a question in one call**: metric definition, descriptions + synonyms, Fivetran provenance, DQ trust caveats, physical table per engine. | ~3-20 KB |
+| `list_semantic_metrics(trust_level, search, limit, offset)` | Semantic Layer metric catalog (type, inputs, models, synonyms, trust). | ~0.4 KB/row |
+| `search(query)` / `fetch(id)` | ChatGPT-style search/fetch over metrics, models and tables. | small |
+| `get_dq_summary()` | **Start here** for DQ triage. Account rollup: counts by risk, missing coverage, failing tests, stale syncs, recommendations by type/confidence, drift. | ~0.5 KB |
 | `list_warehouse_objects(schema, risk_level, missing_coverage, failing_tests, warn_test_failures, stale, limit)` | Compact, filterable index for triage (small rows, no columns/tests). `warn_test_failures` finds warn-severity tests firing while the run stays green. | ~0.3 KB/row |
 | `get_warehouse_object(schema, table)` | Full detail for one object (origin, dbt, columns, tests, exposures, metrics, governance, dq_summary). | ~few KB |
 | `get_impact(schema, table)` | **Blast radius**: downstream dbt models, exposures (dashboards/ML/apps), and reverse-ETL activations. | small |
@@ -247,12 +263,19 @@ uv run metadata-service serve-mcp --transport http --port 8765   # hosted / remo
 | `get_dq_recommendations(schema, table, recommendation_type, confidence, risk, limit)` | Per-object **or** cross-snapshot recommendation filtering. | scales with filter |
 | `get_schema_drift(schema, table, severity)` | Drift records since the previous snapshot. | scales with filter |
 | `get_latest_metadata(scope)` | Full snapshot (large — prefer the tools above). | up to ~400 KB |
-| `refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)` | Trigger a new extraction + snapshot. | small |
+| `refresh_metadata(fivetran_group_id, include_fivetran, include_dbt)` | Trigger a new extraction + snapshot. stdio only by default (not in the remote read-only set). | small |
 
 Recommended agent flow: `get_dq_summary()` to orient → `list_warehouse_objects(...)`
 to find the objects that matter (e.g. `missing_coverage=true` or `failing_tests=true`)
 → `get_warehouse_object()` / `get_dq_recommendations()` to act. This keeps payloads
 small instead of pulling the whole 400 KB snapshot.
+
+`get_semantic_context` is the one-call grounding tool: Semantic Layer metric
+definitions (measures, filters, grain, group-by dimensions), descriptions,
+synonyms incl. legacy source column names from column lineage, Fivetran
+provenance, DQ trust caveats and the physical table per engine/catalog.
+`list_semantic_metrics` browses metrics; `search`/`fetch` follow the
+convention ChatGPT company knowledge / deep research use.
 
 ### Connecting
 
@@ -274,17 +297,23 @@ small instead of pulling the whole 400 KB snapshot.
 With uv (no activated env): set `"command": "uv"`, `"args": ["run", "metadata-service",
 "serve-mcp"]`, and add `"cwd": "/path/to/metadata-service"`.
 
-**Hosted (HTTP)** — for a remote agent in a DQaaS platform:
+**Remote (Streamable HTTP) — any agent.** Claude, ChatGPT, Gemini/ADK,
+Snowflake Cortex and Databricks agents connect to one endpoint:
 
 ```bash
-metadata-service serve-mcp --transport http --port 8765   # binds 127.0.0.1 by default
-# agent connects to the streamable-http endpoint at http://<host>:8765/mcp
+export METADATA_API_KEY=$(openssl rand -hex 32)
+metadata-service serve-mcp --transport http --host 0.0.0.0 --port 8765
+# endpoint https://<host>/mcp ; Authorization: Bearer <key> ; /health is public
 ```
 
-Transport and bind can also be set via `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT`.
-The MCP HTTP transports have **no authentication** — the default bind is
-loopback; to expose them beyond the host, front the port with an authenticating
-reverse proxy (the REST API, by contrast, supports `METADATA_API_KEY` natively).
+HTTP serves the **read-only** tool set by default (`MCP_TOOLS=auto`; no
+`refresh_metadata`) with tool annotations `readOnlyHint: true`. Auth is a
+static bearer key (`METADATA_API_KEY` / `MCP_API_KEYS`) or, for ChatGPT and
+Snowflake Cortex (which only speak OAuth), an OAuth 2.1 resource server
+validating JWTs from your authorization server (`MCP_OAUTH_ISSUER`).
+`serve-mcp` refuses a public bind without either. Per-agent connection steps,
+the auth matrix, a `Dockerfile` and Cloud Run deploy script:
+[docs/any-agent-mcp.md](docs/any-agent-mcp.md).
 
 The tool logic lives in `mcp/tools.py` as plain functions (SDK-independent and
 unit-tested). `mcp/server.py` binds them to the official MCP SDK; if the SDK is
@@ -384,8 +413,18 @@ that Protocol and wiring it into `get_storage`.
   `warehouse/fivetran_metadata.py` already cover Redshift and SQL Server too;
   each just needs a driver extra and a thin connection-handling reader (see
   `warehouse/postgres_reader.py` for the shape). BigQuery and Databricks need
-  their own statements; Managed Data Lake destinations have no SQL information
-  schema at all.
+  their own statements.
+- **Lake catalogs (Managed Data Lake destinations)**: there is no SQL
+  information schema; column `data_type`/`nullable`/`max_length`, partition
+  spec, table format, snapshot and (Iceberg identifier fields) PKs come from
+  the catalogs the destination maintains. `GET /v1/destinations/{id}` names
+  them (Polaris always; Glue/Unity/BigLake/OneLake when enabled) with the
+  Polaris endpoint, catalog and client id, so only `POLARIS_CLIENT_SECRET` is
+  needed. Polaris (any Iceberg REST catalog, plain httpx) and Glue (`catalog-glue`
+  extra) read today; Unity, BigLake and OneLake are documented stubs
+  (`catalog/stubs.py`). Each catalog is read under its own guard, one table
+  failing never blocks the rest, and `build_scope.catalog_enrichment` records
+  each outcome.
 - **Storage**: implement `MetadataStorage` (e.g., GCS, Azure Blob).
 - **Drift**: add change types + severities in `dq/drift.py`.
 - **dbt Discovery API**: use `DbtClient.query_discovery` for richer lineage.

@@ -472,4 +472,5 @@ def test_mcp_server_exposes_all_tools():
         "get_impact", "get_column_impact", "list_metrics", "get_metric_quality",
         "list_activations", "get_activation_readiness", "get_dq_recommendations",
         "get_schema_drift", "get_latest_metadata", "refresh_metadata",
+        "get_semantic_context", "list_semantic_metrics", "search", "fetch",
     }

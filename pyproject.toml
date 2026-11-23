@@ -33,6 +33,12 @@ warehouse-snowflake = ["snowflake-connector-python>=3.0", "cryptography>=42"]
 warehouse-postgres = ["psycopg2-binary>=2.9"]
 # Column-level lineage by parsing compiled dbt SQL.
 lineage = ["sqlglot>=25"]
+# AWS Glue Data Catalog reader for Managed Data Lake destinations. (The
+# Polaris / Iceberg REST reader needs no extra: it is plain httpx.)
+catalog-glue = ["boto3>=1.34"]
+# Remote MCP for any agent: Streamable HTTP + bearer/OAuth auth (PyJWT comes
+# with the MCP SDK).
+remote = ["mcp>=1.10", "sqlglot>=25"]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",

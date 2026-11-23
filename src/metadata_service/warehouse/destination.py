@@ -84,13 +84,16 @@ class DestinationInfo:
     port: int | None = None
     region: str | None = None
     setup_status: str | None = None
+    #: Open-lake coordinates for a Managed Data Lake destination (see
+    #: :func:`describe_lake`); None for a warehouse destination.
+    lake: dict | None = None
 
     def supports_information_schema(self) -> bool:
         return self.warehouse_type in ANSI_INFORMATION_SCHEMA_TYPES
 
     def as_dict(self) -> dict:
         """Serializable form for the normalized document (never includes config)."""
-        return {
+        out = {
             "destination_id": self.destination_id,
             "group_id": self.group_id,
             "service": self.service,
@@ -101,6 +104,14 @@ class DestinationInfo:
             "region": self.region,
             "setup_status": self.setup_status,
         }
+        # Only lake destinations carry the key, so a warehouse destination's
+        # serialized form is unchanged.
+        if self.lake:
+            out["lake"] = self.lake
+        return out
+
+    def is_lake(self) -> bool:
+        return self.warehouse_type in NO_INFORMATION_SCHEMA_TYPES
 
 
 def _first_value(config: dict, keys) -> str | None:
@@ -156,7 +167,85 @@ def describe_destination(payload: dict | None) -> DestinationInfo | None:
         port=_first_port(config, _PORT_KEYS),
         region=payload.get("region"),
         setup_status=payload.get("setup_status"),
+        lake=describe_lake(config) if warehouse_type in NO_INFORMATION_SCHEMA_TYPES else None,
     )
+
+
+def _flag(value) -> bool:
+    """Fivetran config booleans arrive as bools or as "true"/"false" strings."""
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def describe_lake(config: dict | None) -> dict:
+    """Non-secret open-lake coordinates from a Managed Data Lake config.
+
+    A Fivetran Managed Data Lake destination always registers its tables in the
+    Fivetran-managed Apache Polaris catalog (``polaris_catalog_configuration``;
+    the catalog name is the destination id) and optionally maintains them in
+    AWS Glue, Databricks Unity Catalog, BigQuery/BigLake metastore or OneLake.
+    Only identifiers are kept: ``client_secret`` and every other masked field
+    are dropped. The Polaris ``client_id`` is an OAuth client identifier, not a
+    credential, and is kept so only the secret has to be supplied.
+
+    Each catalog entry is ``{"type", "enabled", ...coordinates}``. Namespaces
+    are the Fivetran destination schema names in every catalog.
+    """
+    config = config if isinstance(config, dict) else {}
+    catalogs: list[dict] = []
+
+    polaris = config.get("polaris_catalog_configuration")
+    if isinstance(polaris, dict) and polaris:
+        catalogs.append({
+            "type": "polaris",
+            "enabled": True,
+            "endpoint": _first_value(polaris, ("polaris_server_endpoint", "endpoint")),
+            "catalog": _first_value(polaris, ("polaris_catalog", "catalog")),
+            "client_id": _first_value(polaris, ("client_id",)),
+        })
+    if _flag(config.get("should_maintain_tables_in_glue")):
+        catalogs.append({
+            "type": "glue",
+            "enabled": True,
+            "region": _first_value(config, ("region",)),
+            "catalog_id": _first_value(config, ("glue_catalog_id", "aws_account_id")),
+        })
+    if _flag(config.get("should_maintain_tables_in_databricks")):
+        catalogs.append({
+            "type": "unity",
+            "enabled": True,
+            "catalog": _first_value(config, ("catalog",)),
+            "host": _first_value(config, ("server_host_name", "host")),
+        })
+    if _flag(config.get("should_maintain_tables_in_bqms")) or \
+            _flag(config.get("should_maintain_tables_in_biglake")):
+        catalogs.append({
+            "type": "biglake",
+            "enabled": True,
+            "project_id": _first_value(config, ("gcp_project_id", "project_id")),
+            "region": _first_value(config, ("bqms_region", "region")),
+        })
+    if _flag(config.get("should_maintain_tables_in_onelake")) or \
+            _first_value(config, ("workspace_name", "onelake_workspace")):
+        catalogs.append({
+            "type": "onelake",
+            "enabled": True,
+            "workspace": _first_value(config, ("workspace_name", "onelake_workspace")),
+            "lakehouse": _first_value(config, ("lakehouse_name", "onelake_lakehouse")),
+        })
+
+    formats = ["iceberg"]
+    if _flag(config.get("should_write_delta")):
+        formats.append("delta")
+    return {
+        "storage_provider": _first_value(config, ("storage_provider",)),
+        "bucket": _first_value(config, ("bucket", "container_name", "storage_account_name")),
+        "prefix_path": _first_value(config, ("prefix_path",)),
+        "region": _first_value(config, ("region",)),
+        "table_formats": formats,
+        "catalogs": catalogs,
+    }
 
 
 def destination_from_dict(data: dict | None) -> DestinationInfo | None:

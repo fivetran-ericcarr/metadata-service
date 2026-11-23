@@ -130,10 +130,30 @@ class DbtNormalizer:
         for uid, sm in (semantic or {}).items():
             models = [n for n in (sm.get("depends_on") or {}).get("nodes") or [] if n.startswith("model.")]
             sm_models[uid] = models
+            relation = sm.get("node_relation") or {}
             sm_out.append({
                 "unique_id": uid, "name": sm.get("name"),
                 "model_unique_ids": models,
                 "measures": [m.get("name") for m in sm.get("measures") or []],
+                # Semantic Layer definition detail (for get_semantic_context).
+                "description": sm.get("description"),
+                "label": sm.get("label"),
+                "relation_name": relation.get("relation_name"),
+                "agg_time_dimension": (sm.get("defaults") or {}).get("agg_time_dimension"),
+                "primary_entity": sm.get("primary_entity"),
+                "entities": [{"name": e.get("name"), "type": e.get("type"), "expr": e.get("expr")}
+                             for e in sm.get("entities") or []],
+                "dimensions": [{
+                    "name": d.get("name"), "type": d.get("type"), "expr": d.get("expr"),
+                    "label": d.get("label"), "description": d.get("description"),
+                    "time_granularity": (d.get("type_params") or {}).get("time_granularity"),
+                } for d in sm.get("dimensions") or []],
+                "measure_details": [{
+                    "name": m.get("name"), "agg": m.get("agg"), "expr": m.get("expr"),
+                    "label": m.get("label"), "description": m.get("description"),
+                    "agg_time_dimension": m.get("agg_time_dimension"),
+                    "non_additive_dimension": m.get("non_additive_dimension"),
+                } for m in sm.get("measures") or []],
             })
 
         deps = {uid: (m.get("depends_on") or {}).get("nodes") or [] for uid, m in (metrics or {}).items()}
@@ -154,10 +174,19 @@ class DbtNormalizer:
 
         met_out: list[dict] = []
         for uid, m in (metrics or {}).items():
+            meta = m.get("meta") or (m.get("config") or {}).get("meta") or {}
             met_out.append({
                 "unique_id": uid, "name": m.get("name"), "label": m.get("label"),
                 "type": m.get("type"), "description": m.get("description"),
                 "model_unique_ids": sorted(resolve(uid, set())),
+                "type_params": _metric_type_params(m.get("type_params") or {}),
+                "filter": _where_filters(m.get("filter")),
+                "time_granularity": m.get("time_granularity"),
+                "semantic_model_unique_ids": [d for d in deps.get(uid, [])
+                                              if d.startswith("semantic_model.")],
+                "input_metric_unique_ids": [d for d in deps.get(uid, []) if d.startswith("metric.")],
+                "meta": meta,
+                "tags": m.get("tags") or [],
             })
         return met_out, sm_out
 
@@ -455,6 +484,64 @@ def _build_columns(manifest_columns: dict, catalog_columns: dict) -> list[dict]:
                 "meta": {},
             }
         )
+    return out
+
+
+def _where_filters(f) -> list[str]:
+    """dbt ``filter`` ({where_filters: [{where_sql_template}]}) -> SQL templates."""
+    if not f:
+        return []
+    if isinstance(f, str):
+        return [f]
+    if isinstance(f, dict):
+        return [w.get("where_sql_template") for w in f.get("where_filters") or []
+                if isinstance(w, dict) and w.get("where_sql_template")]
+    return []
+
+
+def _metric_input(ref) -> dict | None:
+    if not isinstance(ref, dict) or not ref.get("name"):
+        return None
+    out = {"name": ref.get("name")}
+    if ref.get("alias"):
+        out["alias"] = ref["alias"]
+    filters = _where_filters(ref.get("filter"))
+    if filters:
+        out["filter"] = filters
+    if ref.get("offset_window"):
+        out["offset_window"] = ref["offset_window"]
+    if ref.get("fill_nulls_with") is not None:
+        out["fill_nulls_with"] = ref["fill_nulls_with"]
+    return out
+
+
+def _metric_type_params(tp: dict) -> dict:
+    """The parts of a metric's ``type_params`` that define it, compacted."""
+    out: dict = {}
+    for key in ("measure", "numerator", "denominator"):
+        ref = _metric_input(tp.get(key))
+        if ref:
+            out[key] = ref
+    if tp.get("expr"):
+        out["expr"] = tp["expr"]
+    inputs = [r for r in (_metric_input(x) for x in tp.get("metrics") or []) if r]
+    if inputs:
+        out["metrics"] = inputs
+    measures = [r for r in (_metric_input(x) for x in tp.get("input_measures") or []) if r]
+    if measures:
+        out["input_measures"] = measures
+    cum = tp.get("cumulative_type_params") or {}
+    window = tp.get("window") or cum.get("window")
+    if window:
+        out["window"] = window
+    grain = tp.get("grain_to_date") or cum.get("grain_to_date")
+    if grain:
+        out["grain_to_date"] = grain
+    conv = tp.get("conversion_type_params")
+    if conv:
+        out["conversion"] = {k: conv.get(k) for k in
+                             ("base_measure", "conversion_measure", "entity", "calculation", "window")
+                             if conv.get(k) is not None}
     return out
 
 

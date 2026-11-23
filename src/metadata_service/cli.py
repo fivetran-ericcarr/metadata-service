@@ -212,6 +212,46 @@ def recommendations(
     typer.echo(json.dumps({"count": len(recs), "recommendations": recs}, indent=2, default=str))
 
 
+@app.command("semantic-context")
+def semantic_context_cmd(
+    query: str = typer.Argument(..., help="Metric, dbt model, schema.table, or a topic."),
+    kind: str = typer.Option("auto", "--kind", help="auto | topic | metric | model | table"),
+    top_k: int = typer.Option(2, "--top-k", help="Matches to expand (1-10)."),
+    max_columns: int = typer.Option(15, "--max-columns", help="Columns per model/table."),
+) -> None:
+    """Print the get_semantic_context payload for QUERY from the latest snapshot."""
+    from .mcp import tools
+
+    try:
+        result = tools.get_semantic_context(query, kind=kind, top_k=top_k, max_columns=max_columns,
+                                            settings=get_settings())
+    except tools.MetadataUnavailable as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if "error" in result:
+        raise typer.Exit(code=2)
+
+
+@app.command("semantic-metrics")
+def semantic_metrics_cmd(
+    trust_level: str | None = typer.Option(None, "--trust-level"),
+    search: str | None = typer.Option(None, "--search"),
+    limit: int = typer.Option(50, "--limit"),
+    offset: int = typer.Option(0, "--offset"),
+) -> None:
+    """List Semantic Layer metrics (definition summary + trust) from the latest snapshot."""
+    from .mcp import tools
+
+    try:
+        result = tools.list_semantic_metrics(trust_level=trust_level, search=search, limit=limit,
+                                             offset=offset, settings=get_settings())
+    except tools.MetadataUnavailable as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
 def _guard_or_exit(host: str | None, api_key: str | None, *, surface: str) -> None:
     """Fail-closed startup check: refuse an unauthenticated non-loopback bind."""
     try:
@@ -248,13 +288,18 @@ def serve_mcp(
     settings = get_settings()
     resolved_transport = transport or settings.mcp_transport
     resolved_host = host or settings.mcp_host
-    # The MCP transport has no built-in key, so an http/sse bind on a public
-    # interface exposes the full inventory and the (billed) refresh tool to
-    # anyone on the port. Refuse it unless auth is fronted by a proxy
-    # (METADATA_ALLOW_UNAUTHENTICATED=1).
-    if (resolved_transport or "").lower() != "stdio" and not settings.allow_unauthenticated:
-        _guard_or_exit(resolved_host, None,
-                       surface=f"the MCP {resolved_transport} transport (no per-request auth)")
+    # A public HTTP bind exposes the full inventory to anyone on the port, so
+    # it needs per-request auth: streamable-http enforces METADATA_API_KEY /
+    # MCP_API_KEYS (api_key) or OAuth JWTs (oauth). SSE has no auth hook here
+    # and still needs a proxy (METADATA_ALLOW_UNAUTHENTICATED=1).
+    from .mcp.auth import resolve_auth_mode
+
+    norm = (resolved_transport or "").lower()
+    if norm != "stdio" and not settings.allow_unauthenticated:
+        mode = resolve_auth_mode(settings)
+        has_auth = norm in ("http", "streamable-http") and mode in ("api_key", "oauth")
+        _guard_or_exit(resolved_host, "configured" if has_auth else None,
+                       surface=f"the MCP {resolved_transport} transport (MCP_AUTH={mode})")
     run_server(
         transport=resolved_transport,
         host=resolved_host,
