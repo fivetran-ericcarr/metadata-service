@@ -250,6 +250,28 @@ def test_table_context_and_ids(doc):
     assert r["provenance"][0]["connection_id"] == "conn_sf_001"
 
 
+def test_disabled_table_caveat_and_lake_only_provenance(doc):
+    import copy
+
+    d = copy.deepcopy(doc)
+    contact = next(o for o in d["warehouse_objects"] if o["name"] == "contact")
+    contact["origin"]["enabled"] = False
+    contact["dbt"]["source_unique_id"] = None  # nothing models it (e.g. a raw lake table)
+    contact["lake"] = {"table_format": "iceberg", "last_updated": "2026-05-01T15:00:03Z",
+                       "identifier_fields": ["ctid_fivetran_id"], "catalog_only_columns": ["ctid_fivetran_id"],
+                       "catalogs": ["polaris"]}
+    r = semantic_context(d, "salesforce.contact")
+    s = r["subjects"][0]
+    assert s["enabled_in_fivetran"] is False
+    assert s["lake"]["identifier_fields"] == ["ctid_fivetran_id"]
+    # Provenance comes from the object's own Fivetran origin, without dbt.
+    assert r["provenance"][0]["connection_id"] == "conn_sf_001"
+    assert r["provenance"][0]["disabled_tables"] == 1
+    cav = next(c for c in r["trust"]["caveats"] if c["kind"] == "disabled_table")
+    assert "lake data last written 2026-05-01T15:00:03Z" in cav["message"]
+    assert r["trust"]["level"] == "watch"
+
+
 def test_no_match_and_payload_bounds(doc):
     r = semantic_context(doc, "zzz qqq")
     assert r["subjects"] == [] and "message" in r and r["trust"]["level"] == "unknown"

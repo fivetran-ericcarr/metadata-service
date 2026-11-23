@@ -106,6 +106,16 @@ def apply_catalog_tables(fivetran_normalized: dict, catalog_type: str,
                 if lake.get(f) is None and info.get(f) is not None:
                     lake[f] = info[f]
             cols = info.get("columns") or {}
+            # The lake table's own key (Iceberg identifier fields) and the
+            # columns only the lake has. Fivetran system columns such as
+            # ctid_fivetran_id / _fivetran_synced are not in the connection's
+            # schema config, so they would otherwise vanish; and the lake key
+            # can differ from the source PK the config reports.
+            if lake.get("identifier_fields") is None and info.get("primary_keys"):
+                lake["identifier_fields"] = list(info["primary_keys"])
+            if "catalog_only_columns" not in lake and cols:
+                known = {(c.get("destination_name") or "").lower() for c in table.get("columns", []) or []}
+                lake["catalog_only_columns"] = sorted(a.get("name") or n for n, a in cols.items() if n not in known)
             pks = {c.lower() for c in (info.get("primary_keys") or [])}
             for col in table.get("columns", []) or []:
                 name = (col.get("destination_name") or "").lower()
@@ -124,11 +134,18 @@ def apply_catalog_tables(fivetran_normalized: dict, catalog_type: str,
 
 
 def wanted_tables(fivetran_normalized: dict) -> list[tuple[str, str]]:
-    """Distinct ``(destination_schema, destination_table)`` pairs to load."""
+    """Distinct ``(destination_schema, destination_table)`` pairs to load.
+
+    Disabled tables are included: disabling a table in Fivetran stops syncing
+    it but leaves the lake table in place, still queryable by every engine,
+    so its catalog facts (last write, snapshot) are exactly what an agent
+    needs to see it is stale. Tables that were never written come back as
+    ``missing``, not as errors.
+    """
     seen: dict[tuple[str, str], tuple[str, str]] = {}
     for conn in fivetran_normalized.get("connections", []) or []:
         for table in conn.get("tables", []) or []:
             schema, name = table.get("destination_schema"), table.get("destination_table")
-            if schema and name and table.get("enabled", True):
+            if schema and name:
                 seen.setdefault((schema.lower(), name.lower()), (schema, name))
     return [seen[k] for k in sorted(seen)]

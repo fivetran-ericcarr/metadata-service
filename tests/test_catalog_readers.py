@@ -122,6 +122,9 @@ def test_parse_iceberg_metadata():
     assert t["columns"]["id"] == {"name": "id", "data_type": "string", "nullable": False,
                                   "max_length": None, "field_id": 1, "doc": None}
     assert t["columns"]["annual_revenue"]["data_type"] == "decimal(18,2)"
+    spaced = parse_table_metadata({"schemas": [{"fields": [{"id": 1, "name": "x", "type": "decimal(10, 10)"}]}]},
+                                  catalog="polaris", namespace="n", table="t")
+    assert spaced["columns"]["x"]["data_type"] == "decimal(10,10)"  # same spelling as Glue
     assert t["columns"]["tags"]["data_type"] == "list<string>"
     assert t["columns"]["hash"]["max_length"] == 16
     assert t["partition_spec"] == [{"source_column": "_fivetran_synced", "transform": "day",
@@ -262,11 +265,19 @@ def test_glue_reader_isolates_databases():
 # -- enrichment ---------------------------------------------------------------
 def _norm():
     return {"connections": [{"connection_id": "c1", "tables": [{
+        "destination_schema": "salesforce", "destination_table": "old_disabled", "enabled": False,
+        "columns": []}, {
         "destination_schema": "salesforce", "destination_table": "account", "enabled": True,
         "columns": [{"destination_name": "id", "is_primary_key": False},
                     {"destination_name": "name"},
                     {"destination_name": "email", "data_type": "VARCHAR", "schema_source": "information_schema"}],
     }]}]}
+
+
+def test_wanted_tables_include_disabled():
+    from metadata_service.catalog import wanted_tables
+
+    assert wanted_tables(_norm()) == [("salesforce", "account"), ("salesforce", "old_disabled")]
 
 
 def test_apply_catalog_tables_precedence_and_pks():
@@ -275,7 +286,7 @@ def test_apply_catalog_tables_precedence_and_pks():
     glue = parse_glue_table(GLUE_TABLE, namespace="salesforce")
     c1 = apply_catalog_tables(norm, "polaris", {("salesforce", "account"): polaris})
     c2 = apply_catalog_tables(norm, "glue", {("salesforce", "account"): glue})
-    table = norm["connections"][0]["tables"][0]
+    table = norm["connections"][0]["tables"][1]
     cols = {c["destination_name"]: c for c in table["columns"]}
     assert c1 == {"tables": 1, "columns": 2, "primary_keys": 1}
     assert c2["columns"] == 0  # polaris already described them
@@ -285,6 +296,9 @@ def test_apply_catalog_tables_precedence_and_pks():
     assert cols["email"]["schema_source"] == "information_schema"
     assert table["lake"]["catalogs"] == ["polaris", "glue"]
     assert table["lake"]["partition_spec"][0]["transform"] == "day"
+    assert table["lake"]["identifier_fields"] == ["id"]
+    # Lake-only columns (e.g. Fivetran system columns absent from the schema config).
+    assert table["lake"]["catalog_only_columns"] == ["_fivetran_synced", "annual_revenue", "hash", "tags"]
 
 
 # -- factory ------------------------------------------------------------------

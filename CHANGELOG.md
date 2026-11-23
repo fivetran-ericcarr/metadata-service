@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors), reader construction contained. `build_scope.catalog_enrichment`
   records each catalog's outcome and is present only when catalogs applied,
   so warehouse builds keep their scope and drift baseline.
+- Validated live against a Managed Data Lake destination: Polaris and Glue
+  both `ran` with 0 errors and enriched every existing lake table (types,
+  nullability, row counts, snapshots). That run led to these changes:
+  disabled tables are read (they stay queryable in the lake),
+  `lake.identifier_fields` / `lake.catalog_only_columns` keep the lake key and
+  the Fivetran system columns the schema config omits, and Iceberg
+  `decimal(p, s)` spacing is normalized to match Glue.
 - `warehouse_objects[].lake` and `columns[].schema_source` /
   `data_type_source` / `key_source` values `catalog:<type>`.
 
@@ -43,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and legacy source column names found through column-level lineage), Fivetran
   provenance per connection (last sync, staleness, live vs fixtures), DQ trust
   (level + caveats from failing/warn/unverified tests, stale syncs, quarantine
-  registers) and the physical location per engine/catalog. Small payloads:
+  registers, tables disabled in Fivetran) and the physical location per
+  engine/catalog. Small payloads:
   `top_k`, column/dimension/caveat caps with `*_truncated` counts, empty fields
   dropped.
 - **`list_semantic_metrics`** (MCP, `GET /semantic/metrics`,

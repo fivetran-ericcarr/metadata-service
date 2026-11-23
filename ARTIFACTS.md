@@ -477,9 +477,19 @@ table:
   "partition_spec": [{"source_column": "_fivetran_synced", "transform": "day", "name": "_fivetran_synced_day"}],
   "last_updated": "2026-11-10T08:00:00Z",
   "current_snapshot_id": 77, "snapshot_at": "2026-11-10T08:00:00Z",
-  "snapshot_operation": "overwrite", "total_records": 1250
+  "snapshot_operation": "overwrite", "total_records": 1250,
+  "identifier_fields": ["ctid_fivetran_id"],
+  "catalog_only_columns": ["_fivetran_deleted", "_fivetran_synced", "ctid_fivetran_id"]
 }
 ```
+
+`identifier_fields` is the lake table's own key (Iceberg identifier fields). It
+can differ from the source PK in `columns[].is_primary_key`; for example, the
+connection config may report `record_id` while the Iceberg key is Fivetran's
+`ctid_fivetran_id`. `catalog_only_columns` are columns the lake table has but
+the connection's schema config does not list, typically Fivetran system
+columns. Tables **disabled** in Fivetran are still read: they stay queryable in
+the lake, and `last_updated` shows how old they are.
 
 `catalogs` lists every catalog that knew the table, in precedence order
 (Polaris, Glue, Unity, BigLake, OneLake); each attribute comes from the first

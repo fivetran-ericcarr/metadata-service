@@ -56,17 +56,18 @@ The same payload is available over REST (`GET /semantic/context?query=...`,
                 source_columns: [{column, source_table, connector_service, connection_id}]}],
      columns_truncated, tests: {total, by_status}, locations[], status, match_score},
     # kind = table (a Fivetran-synced destination table)
-    {kind, object_id, name, risk_level, dbt_source, downstream_models[],
+    {kind, object_id, name, risk_level, dbt_source, downstream_models[], enabled_in_fivetran,
      columns: [{name, data_type, nullable, is_primary_key, description, source_name}],
      locations: [{catalog: polaris|glue|unity|snowflake|..., fqn, engines, ...}],
      lake: {table_format, format_version, partition_spec, last_updated, snapshot_at,
-            total_records, catalogs}, match_score}
+            total_records, catalogs, identifier_fields, catalog_only_columns}, match_score}
   ],
   other_matches: [{id, name, kind, score}],      # pass an id back as `query`
   provenance: [{connection_id, connector_service, last_successful_sync, sync_state,
-                setup_state, data_mode, tables: [{destination, source}], stale_tables, table_count}],
+                setup_state, data_mode, tables: [{destination, source}], stale_tables,
+                disabled_tables, table_count}],
   trust: {level: trusted|watch|at_risk|unknown,
-          caveats: [{kind: failing_test|stale_sync|warn_test|quarantine|unverified_test,
+          caveats: [{kind: failing_test|stale_sync|disabled_table|warn_test|quarantine|unverified_test,
                      id, message, test, status, failures, severity, attached, tests, rule}],
           caveats_truncated},
   guidance: [string],              # from the overrides file, when set
@@ -92,8 +93,11 @@ How the pieces are derived:
   synonyms.
 - **Trust** walks the subject's dbt ancestors: failing/warn/unverified
   (`reused` without a prior result) tests, stale Fivetran syncs grouped per
-  connection, and any quarantine register (a model named or tagged
-  `quarantine`) sharing those ancestors. A metric's snapshot `trust_level` can
+  connection, tables disabled in Fivetran (they stop syncing while the
+  connection stays green, so the data ages silently; the caveat gives the
+  lake's last write), and any quarantine register (a model named or tagged
+  `quarantine`) sharing those ancestors. Provenance also covers table
+  subjects that no dbt model reads yet. A metric's snapshot `trust_level` can
   only make the result worse.
 - **Locations** come from destination facts only: no catalog call is needed to
   tell an agent `<destination_id>.salesforce.account` (Polaris),

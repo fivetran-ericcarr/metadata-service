@@ -371,35 +371,78 @@ def _caveats_for(ix: SemanticIndex, uids: set[str]) -> list[dict]:
                         "message": f"Records failing DQ rules upstream are registered in "
                                    f"{m.get('relation_name') or m.get('name')}; rows there may be "
                                    f"excluded or flagged in this result — query it to explain exclusions."})
-    order = {"failing_test": 0, "stale_sync": 1, "warn_test": 2, "quarantine": 3, "unverified_test": 4}
-    return sorted(out, key=lambda c: (order.get(c["kind"], 5), c.get("id") or ""))
+    return out
+
+
+_CAVEAT_ORDER = {"failing_test": 0, "stale_sync": 1, "disabled_table": 1, "warn_test": 2, "quarantine": 3,
+                 "unverified_test": 4}
+
+
+def _sort_caveats(caveats: list[dict]) -> list[dict]:
+    return sorted(caveats, key=lambda c: (_CAVEAT_ORDER.get(c["kind"], 5), c.get("id") or ""))
 
 
 def _trust_level(caveats: list[dict], has_tests: bool) -> str:
     kinds = {c["kind"] for c in caveats}
     if "failing_test" in kinds:
         return "at_risk"
-    if kinds & {"warn_test", "stale_sync", "unverified_test"}:
+    if kinds & {"warn_test", "stale_sync", "unverified_test", "disabled_table"}:
         return "watch"
     return "trusted" if has_tests else "unknown"
 
 
-def _provenance(ix: SemanticIndex, uids: set[str], max_tables: int = 8) -> list[dict]:
-    """Fivetran provenance of the upstream sources, one entry per connection."""
+def _upstream_objects(ix: SemanticIndex, uids: set[str], tables: list[dict] | None = None
+                      ) -> tuple[list[dict], list[str]]:
+    """Fivetran-synced objects behind the subjects: those matched to upstream
+    dbt sources, plus table subjects themselves (which may have no dbt source
+    at all, e.g. a lake table nothing models yet). Also the unmatched sources."""
     srcs = set()
     for u in uids:
         if u.startswith("source."):
             srcs.add(u)
         srcs |= {a for a in ix.ancestors(u) if a.startswith("source.")}
-    by_conn: dict[str, dict] = {}
-    unmatched = []
+    objs, seen, unmatched = [], set(), []
     for s in sorted(srcs):
         if not ix.in_scope(s):
             continue
         obj = ix.obj_by_source.get(s)
-        if not obj:
+        if obj is None:
             unmatched.append(s)
-            continue
+        elif obj.get("object_id") not in seen:
+            seen.add(obj.get("object_id"))
+            objs.append(obj)
+    for obj in tables or []:
+        if obj.get("object_id") not in seen:
+            seen.add(obj.get("object_id"))
+            objs.append(obj)
+    return objs, unmatched
+
+
+def _disabled_caveats(objs: list[dict]) -> list[dict]:
+    """A table disabled in Fivetran stops syncing but stays queryable (in a lake,
+    every engine still reads it), while its connection keeps reporting green
+    syncs — so its data silently ages. One caveat per connection."""
+    by_conn: dict[str, list[dict]] = defaultdict(list)
+    for o in objs:
+        if (o.get("origin") or {}).get("enabled") is False:
+            by_conn[(o.get("origin") or {}).get("connection_id")].append(o)
+    out = []
+    for conn, tables in sorted(by_conn.items(), key=lambda kv: str(kv[0])):
+        last = sorted((t.get("lake") or {}).get("last_updated") or "" for t in tables)
+        last_written = next((x for x in reversed(last) if x), None)
+        names = ", ".join(sorted(f"{t.get('schema')}.{t.get('name')}" for t in tables)[:5])
+        more = f" (+{len(tables) - 5} more)" if len(tables) > 5 else ""
+        written = f"; lake data last written {last_written}" if last_written else ""
+        out.append({"kind": "disabled_table", "id": f"DISABLED:{conn}", "attached": conn, "tables": len(tables),
+                    "message": f"{len(tables)} table(s) are disabled in Fivetran connection {conn} and no "
+                               f"longer sync, though the connection's own syncs succeed: {names}{more}{written}."})
+    return out
+
+
+def _provenance(ix: SemanticIndex, objs: list[dict], unmatched: list[str], max_tables: int = 8) -> list[dict]:
+    """Fivetran provenance of the upstream objects, one entry per connection."""
+    by_conn: dict[str, dict] = {}
+    for obj in objs:
         o = obj.get("origin") or {}
         conn = o.get("connection_id") or "unknown"
         entry = by_conn.setdefault(conn, {
@@ -409,11 +452,13 @@ def _provenance(ix: SemanticIndex, uids: set[str], max_tables: int = 8) -> list[
             "sync_state": o.get("sync_state"),
             "setup_state": o.get("setup_state"),
             "data_mode": ix.data_mode,
-            "tables": [], "stale_tables": 0, "table_count": 0,
+            "tables": [], "stale_tables": 0, "disabled_tables": 0, "table_count": 0,
         })
         entry["table_count"] += 1
         if obj.get("object_id") in ix.stale_ids:
             entry["stale_tables"] += 1
+        if o.get("enabled") is False:
+            entry["disabled_tables"] += 1
         if len(entry["tables"]) < max_tables:
             entry["tables"].append({
                 "destination": f"{obj.get('schema')}.{obj.get('name')}",
@@ -618,8 +663,10 @@ def table_context(ix: SemanticIndex, key: str, qt: set[str], max_columns: int) -
         "locations": physical_locations(ix.destination, o.get("schema"), o.get("name")),
     }
     if lake:
+        out["enabled_in_fivetran"] = (o.get("origin") or {}).get("enabled", True)
         out["lake"] = {k: lake.get(k) for k in ("table_format", "format_version", "partition_spec",
-                                               "last_updated", "snapshot_at", "total_records", "catalogs")
+                                               "last_updated", "snapshot_at", "total_records", "catalogs",
+                                               "identifier_fields", "catalog_only_columns")
                        if lake.get(k) is not None}
     return out
 
@@ -634,7 +681,7 @@ def semantic_context(doc: dict, query: str, *, kind: str = "auto", top_k: int = 
     qt = _tokens(query.split(":", 1)[-1] if query else "")
     chosen = matches[:top_k]
 
-    subjects, nodes, metric_names = [], set(), set()
+    subjects, nodes, metric_names, table_objs = [], set(), set(), []
     for mt in chosen:
         if mt["kind"] == "metric":
             ctx = metric_context(ix, mt["key"], qt, max_dimensions)
@@ -647,13 +694,15 @@ def semantic_context(doc: dict, query: str, *, kind: str = "auto", top_k: int = 
             nodes.add(mt["key"])
         else:
             ctx = table_context(ix, mt["key"], qt, max_columns)
+            table_objs.append(ix.obj_by_name[tuple(mt["key"].split(".", 1))])
             src = ctx.get("dbt_source")
             if src:
                 nodes.add(src)
         ctx["match_score"] = mt["score"]
         subjects.append(ctx)
 
-    caveats = _caveats_for(ix, nodes) if nodes else []
+    upstream, unmatched = _upstream_objects(ix, nodes, table_objs)
+    caveats = _sort_caveats((_caveats_for(ix, nodes) if nodes else []) + _disabled_caveats(upstream))
     has_tests = any(ix.tests_by_node.get(n) for n in nodes | {a for n in nodes for a in ix.ancestors(n)})
     levels = [s["trust"]["level"] for s in subjects if s["kind"] == "metric"]
     level = _trust_level(caveats, has_tests)
@@ -672,7 +721,7 @@ def semantic_context(doc: dict, query: str, *, kind: str = "auto", top_k: int = 
         "subjects": subjects,
         "other_matches": [{"id": f"{m['kind']}:{m['key']}", "name": m["name"], "kind": m["kind"],
                            "score": m["score"]} for m in matches[top_k: top_k + 10]],
-        "provenance": _provenance(ix, nodes),
+        "provenance": _provenance(ix, upstream, unmatched),
         "trust": {"level": level, "caveats": caveats[:max_caveats],
                   "caveats_truncated": max(len(caveats) - max_caveats, 0)},
     }

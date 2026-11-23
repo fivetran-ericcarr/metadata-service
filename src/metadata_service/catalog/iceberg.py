@@ -24,7 +24,9 @@ def render_type(t) -> str | None:
     """Iceberg type -> display string. Primitives are already strings
     (``long``, ``decimal(38,10)``, ``timestamptz``); nested types are objects."""
     if isinstance(t, str):
-        return t
+        # Catalogs differ on spacing ("decimal(10, 2)" vs Glue's "decimal(10,2)");
+        # one spelling keeps column-type drift from flapping between them.
+        return re.sub(r"\s+", "", t)
     if not isinstance(t, dict):
         return None
     kind = t.get("type")
