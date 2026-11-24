@@ -43,10 +43,12 @@ _ARTIFACT_KEYS = {
 
 
 class DbtExtractor:
-    def __init__(self, client: DbtClient, account_id: str, *, reused_lookback_runs: int = 10) -> None:
+    def __init__(self, client: DbtClient, account_id: str, *, reused_lookback_runs: int = 10,
+                 semantic_lookback_runs: int = 25) -> None:
         self._client = client
         self._account_id = account_id
         self._reused_lookback_runs = max(0, int(reused_lookback_runs))
+        self._semantic_lookback_runs = max(0, int(semantic_lookback_runs))
 
     def extract(
         self,
@@ -142,6 +144,7 @@ class DbtExtractor:
             if "manifest" in artifacts:
                 self._resolve_step_run_results(run, artifacts, errors)
                 self._carry_forward_reused(run, runs, artifacts, errors)
+                self._carry_forward_semantic_layer(run, runs, artifacts, errors)
                 if fallback:
                     errors.append({
                         "source": "dbt", "run_id": run_id,
@@ -250,6 +253,108 @@ class DbtExtractor:
         base = next((d for _, d in reversed(selected)
                      if run_results_command(d) in TEST_BEARING_COMMANDS), selected[-1][1])
         return dict(base, results=list(merged.values())), [i for i, _ in selected]
+
+    def _carry_forward_semantic_layer(self, anchor: dict, runs: list[dict], artifacts: dict,
+                                      errors: list[dict]) -> None:
+        """Recover dbt Semantic Layer definitions a dbt Fusion manifest leaves out.
+
+        dbt Fusion (2.x) writes ``manifest.json`` with empty ``metrics`` and
+        ``semantic_models`` and no ``semantic_manifest.json``, even when the project
+        defines them. A snapshot built from such a run carries no governed metric
+        definitions, and agents then report a defined metric as missing.
+
+        Only for a Fusion anchor whose manifest has no Semantic Layer, earlier
+        finished runs of the same scope (newest first, up to
+        ``semantic_lookback_runs``) are probed for ``semantic_manifest.json`` — a
+        small file dbt-core writes whenever a Semantic Layer exists. The first run
+        that has one supplies ``metrics`` + ``semantic_models`` from its
+        ``manifest.json``. Semantic models whose dbt model no longer exists in the
+        anchor manifest are dropped, and so are metrics that depend on them.
+
+        Result: ``artifacts["semantic_layer"] = {metrics, semantic_models,
+        run_id, dbt_version, generated_at, reason, dropped}``; the normalizer
+        uses it and stamps each definition with where it came from.
+        """
+        manifest = artifacts.get("manifest") or {}
+        if manifest.get("metrics") or manifest.get("semantic_models"):
+            return
+        anchor_version = str((manifest.get("metadata") or {}).get("dbt_version") or "")
+        if not _is_fusion(anchor_version):
+            return  # dbt-core serializes the Semantic Layer itself; empty means none
+
+        anchor_id = anchor.get("id")
+        older = [r for r in runs or []
+                 if r.get("id") is not None and r.get("finished_at") and r.get("id") != anchor_id
+                 and (not isinstance(anchor_id, int) or not isinstance(r.get("id"), int)
+                      or r["id"] < anchor_id)]
+        older.sort(key=lambda r: (str(r.get("finished_at") or ""), r.get("id") or 0), reverse=True)
+
+        probed: list = []
+        for run in older[: self._semantic_lookback_runs]:
+            run_id = run.get("id")
+            probed.append(run_id)
+            try:
+                self._client.get_run_artifact(self._account_id, run_id, "semantic_manifest.json")
+                donor = self._client.get_run_artifact(self._account_id, run_id, "manifest.json")
+            except DbtArtifactNotFoundError:
+                continue
+            except _FATAL_ERRORS:
+                raise
+            except DbtError as exc:
+                errors.append({"source": "dbt", "run_id": run_id, "resource": "semantic_lookback",
+                               "error_type": type(exc).__name__, "error_message": str(exc)})
+                continue
+            metrics = dict((donor or {}).get("metrics") or {})
+            semantic = dict((donor or {}).get("semantic_models") or {})
+            if not metrics and not semantic:
+                continue
+            nodes = manifest.get("nodes") or {}
+            dropped = [uid for uid, sm in semantic.items()
+                       if any(n.startswith("model.") and n not in nodes
+                              for n in ((sm or {}).get("depends_on") or {}).get("nodes") or [])]
+            for uid in dropped:
+                semantic.pop(uid)
+            changed = True
+            while changed:  # metrics on dropped semantic models / dropped metrics
+                changed = False
+                for uid in list(metrics):
+                    deps = ((metrics[uid] or {}).get("depends_on") or {}).get("nodes") or []
+                    if any(d in dropped for d in deps):
+                        metrics.pop(uid)
+                        dropped.append(uid)
+                        changed = True
+            donor_meta = (donor or {}).get("metadata") or {}
+            artifacts["semantic_layer"] = {
+                "metrics": metrics,
+                "semantic_models": semantic,
+                "run_id": run_id,
+                "dbt_version": donor_meta.get("dbt_version"),
+                "generated_at": donor_meta.get("generated_at"),
+                "reason": f"dbt Fusion {anchor_version} manifest (run {anchor_id}) omits the "
+                          f"Semantic Layer; definitions carried from run {run_id}.",
+                "dropped": dropped,
+            }
+            errors.append({
+                "source": "dbt", "run_id": anchor_id,
+                "error_type": "SemanticLayerCarriedForward",
+                "error_message": f"dbt Fusion {anchor_version} wrote no Semantic Layer to "
+                                 f"manifest.json; {len(metrics)} metric(s) and {len(semantic)} "
+                                 f"semantic model(s) were taken from run {run_id} "
+                                 f"(dbt {donor_meta.get('dbt_version')}). Definitions changed since "
+                                 f"then are not reflected.",
+                **({"dropped": dropped} if dropped else {}),
+            })
+            logger.info("dbt run %s: Semantic Layer carried forward from run %s", anchor_id, run_id)
+            return
+
+        errors.append({
+            "source": "dbt", "run_id": anchor_id,
+            "error_type": "NoSemanticLayer",
+            "error_message": f"dbt Fusion {anchor_version} wrote no Semantic Layer to manifest.json "
+                             f"and none of {len(probed)} earlier run(s) had a semantic_manifest.json. "
+                             f"Metrics the project defines are absent from this snapshot.",
+            "probed_run_ids": probed,
+        })
 
     def _carry_forward_reused(self, anchor: dict, runs: list[dict], artifacts: dict,
                               errors: list[dict]) -> None:
@@ -369,3 +474,9 @@ def _same_code(a, b) -> bool:
     if not a or not b:
         return True
     return " ".join(str(a).split()) == " ".join(str(b).split())
+
+
+def _is_fusion(dbt_version: str) -> bool:
+    """dbt Fusion reports 2.x versions; dbt-core 1.x and dbt Cloud "latest" (YYYY.M.D) do not."""
+    head = dbt_version.split(".", 1)[0]
+    return head.isdigit() and 2 <= int(head) < 1000

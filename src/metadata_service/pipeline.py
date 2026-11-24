@@ -477,6 +477,7 @@ def _extract_dbt(settings: Settings, *, project_id: int | None = None, job_id: i
         return DbtExtractor(
             client, settings.dbt_account_id or "",
             reused_lookback_runs=settings.dbt_reused_lookback_runs,
+            semantic_lookback_runs=settings.dbt_semantic_lookback_runs,
         ).extract(project_id=project_id, job_id=job_id)
 
 

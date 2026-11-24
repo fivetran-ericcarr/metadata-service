@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # in up to this many earlier runs of the same scope; 0 disables the lookup
     # (reused nodes then stay unverified and the activation gate warns).
     dbt_reused_lookback_runs: int = Field(default=10, alias="DBT_REUSED_LOOKBACK_RUNS")
+    # dbt Fusion writes no Semantic Layer (metrics / semantic_models) to manifest.json.
+    # When a Fusion run has none, up to this many earlier runs are probed for a
+    # semantic_manifest.json to carry metric definitions from; 0 disables it.
+    dbt_semantic_lookback_runs: int = Field(default=25, alias="DBT_SEMANTIC_LOOKBACK_RUNS")
 
     # --- Storage ----------------------------------------------------------
     metadata_storage_backend: str = Field(default="local", alias="METADATA_STORAGE_BACKEND")
