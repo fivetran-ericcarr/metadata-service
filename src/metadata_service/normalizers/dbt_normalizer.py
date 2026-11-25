@@ -99,8 +99,21 @@ class DbtNormalizer:
         self._attach_tests(tests, models, sources)
         lineage_edges = self._build_lineage(manifest_nodes, manifest_exposures)
         exposures = self._build_exposures(manifest_exposures)
-        metrics, semantic_models = self._build_metrics(
-            manifest.get("metrics") or {}, manifest.get("semantic_models") or {})
+        metric_defs = manifest.get("metrics") or {}
+        semantic_defs = manifest.get("semantic_models") or {}
+        carried_sl = artifacts.get("semantic_layer") or {}
+        definition_source = None
+        if not metric_defs and not semantic_defs and carried_sl:
+            # dbt Fusion manifests omit the Semantic Layer; the extractor carried it
+            # from the last run that had one (see DbtExtractor._carry_forward_semantic_layer).
+            metric_defs = carried_sl.get("metrics") or {}
+            semantic_defs = carried_sl.get("semantic_models") or {}
+            definition_source = {k: carried_sl.get(k)
+                                 for k in ("run_id", "dbt_version", "generated_at", "reason")}
+        metrics, semantic_models = self._build_metrics(metric_defs, semantic_defs)
+        if definition_source:
+            for item in metrics + semantic_models:
+                item["definition_source"] = dict(definition_source)
         from ..dq.column_lineage import build_column_lineage
         column_lineage_edges = build_column_lineage(manifest, catalog)
 

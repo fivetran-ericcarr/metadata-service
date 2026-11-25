@@ -51,6 +51,28 @@ def _tokens(text: str | None) -> set[str]:
     return out
 
 
+def _overlap(qt: set[str], ct: set[str]) -> float:
+    """Query tokens found in ``ct``: an exact token counts 1, a stem match 0.75.
+
+    A stem match is one token starting with the other, both at least 4
+    characters (or the shorter at least 5), so "cancel" finds "cancellation" and
+    "cancelled", and "premium" finds "premiums", without "rate" matching "rating".
+    """
+    hits = 0.0
+    for c in ct:
+        if c in qt:
+            hits += 1.0
+        elif any(_stem_match(q, c) for q in qt):
+            hits += 0.75
+    return hits
+
+
+def _stem_match(a: str, b: str) -> bool:
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 5 and long_.startswith(short) or (
+        len(short) >= 4 and long_.startswith(short) and len(long_) - len(short) <= 2)
+
+
 def _squash(name: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
@@ -219,10 +241,10 @@ class SemanticIndex:
             score = 0.0
             nt = _tokens((name or "").replace("_", " "))
             if nt:
-                score += 6.0 * len(qt & nt) / len(nt)
+                score += 6.0 * _overlap(qt, nt) / len(nt)
             if label:
                 lt = _tokens(label)
-                score += 3.0 * len(qt & lt) / max(len(lt), 1)
+                score += 3.0 * _overlap(qt, lt) / max(len(lt), 1)
             for s in syn:
                 st = _tokens(s)
                 if st and st <= qt:
@@ -243,7 +265,7 @@ class SemanticIndex:
             ct = _tokens((c.get("name") or "").replace("_", " "))
             legacy = self.legacy_columns(uid, c["name"]) if c.get("name") else []
             syn = self.column_synonyms(uid, c.get("name"), legacy=legacy)
-            hit = 2.0 * len(qt & ct) / max(len(ct), 1) if ct else 0.0
+            hit = 2.0 * _overlap(qt, ct) / max(len(ct), 1) if ct else 0.0
             if any(_tokens(s) and _tokens(s) <= qt for s in syn):
                 hit = max(hit, 2.5)
             best = max(best, hit)
@@ -631,6 +653,7 @@ def metric_context(ix: SemanticIndex, key: str, qt: set[str], max_dimensions: in
         "semantic_models": [s.get("name") for s in sms],
         "models": [ix.models[u]["name"] for u in m.get("model_unique_ids") or [] if u in ix.models],
         "synonyms": _dedupe(_meta_synonyms(m.get("meta")) + list(ix.ov["metric_synonyms"].get(key, []))),
+        "definition_source": m.get("definition_source"),
         "trust": {"level": mq.get("trust_level", "unknown"), "failing_tests": mq.get("failing_tests"),
                   "unverified_tests": mq.get("unverified_tests"),
                   "upstream_object_count": mq.get("upstream_object_count")},
@@ -727,6 +750,8 @@ def semantic_context(doc: dict, query: str, *, kind: str = "auto", top_k: int = 
     }
     if ix.ov["guidance"]:
         out["guidance"] = ix.ov["guidance"]
+    if not ix.metrics and (kind in ("auto", "topic", "metric", None, "") or not chosen):
+        out["semantic_layer"] = semantic_layer_status(ix)
     if not chosen:
         out["message"] = ("No metric, model or table matched. Call list_semantic_metrics or "
                           "list_warehouse_objects to browse, or rephrase with a metric/table name.")
@@ -777,8 +802,27 @@ def list_semantic_metrics(doc: dict, *, trust_level: str | None = None, search: 
     total = len(rows)
     limit = max(1, min(int(limit or 50), 200))
     page = rows[offset: offset + limit]
-    return {"count": total, "returned": len(page), "offset": offset, "metrics": page,
-            "next_offset": offset + limit if offset + limit < total else None}
+    out = {"count": total, "returned": len(page), "offset": offset, "metrics": page,
+           "next_offset": offset + limit if offset + limit < total else None}
+    if not ix.metrics:
+        out["semantic_layer"] = semantic_layer_status(ix)
+    return out
+
+
+def semantic_layer_status(ix: SemanticIndex) -> dict:
+    """Why a snapshot has no metrics, so an empty result is not read as "not defined"."""
+    dbt = (ix.doc.get("sources") or {}).get("dbt") or {}
+    errors = list(dbt.get("errors") or []) + list(ix.doc.get("errors") or [])
+    reason = next((e.get("error_message") for e in errors
+                   if isinstance(e, dict) and e.get("error_type") == "NoSemanticLayer"), None)
+    return {
+        "available": False,
+        "message": "This snapshot carries no dbt Semantic Layer definitions, so metric lookups "
+                   "return nothing. That does not mean the metric is undefined in the dbt project; "
+                   "say the governed definition could not be retrieved rather than that it does "
+                   "not exist.",
+        **({"reason": reason} if reason else {}),
+    }
 
 
 def search_documents(doc: dict, query: str, *, limit: int = 10, base_url: str | None = None,
